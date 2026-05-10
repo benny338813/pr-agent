@@ -13,6 +13,42 @@ args = ["/path/to/your/mcp-server/dist/index.js"]
 
 Once enabled, PR-Agent will automatically discover the tools provided by the MCP server and make them available to the LLM during the review process. MCP support requires the optional `mcp` Python package to be installed in the PR-Agent runtime environment.
 
+## GitNexus Review Context
+
+GitNexus integration is disabled by default because not every PR-Agent runtime has GitNexus installed or a repository index available. When enabled, PR-Agent fetches GitNexus change context before the review and injects it into the review prompt.
+
+```toml
+[gitnexus]
+enabled = true
+command = "node"
+args = ["/path/to/GitNexus/gitnexus/dist/cli/index.js", "mcp"]
+mode = "detect_changes"
+repo = "my-repo"       # optional when only one GitNexus repo is indexed
+scope = "compare"     # compare, unstaged, staged, or all
+base_ref = "main"     # optional; defaults to the provider target branch when available
+fail_on_error = false # keep review running if GitNexus is unavailable
+```
+
+For large hosted-provider repositories, such as GitLab merge requests reviewed from API diffs, prefer `base_context`.
+In this mode GitNexus is treated as a stable indexed snapshot, often produced by CI on protected branches, and PR-Agent
+uses the PR diff to query `context`, `impact`, and `query` against that snapshot. The PR diff remains the source of truth:
+new files, new symbols, renamed code, or call relationships added after the indexed snapshot may be missing from GitNexus,
+and missing GitNexus results are not treated as review findings.
+
+```toml
+[gitnexus]
+enabled = true
+command = "npx"
+args = ["gitnexus", "mcp"]
+mode = "base_context"
+repo = "my-repo"
+index_ref = "develop-stable" # optional metadata shown to the model
+index_commit = "abc1234"     # optional metadata shown to the model
+max_queries = 5
+max_symbols_per_file = 2
+fail_on_error = false
+```
+
 ## Custom HTTP Headers for AI Models
 
 If you need to send custom HTTP headers to the AI model provider (for example, to identify your request with a specific model name or for API gateway authentication), you can use the `LITELLM.EXTRA_HEADERS` configuration.
