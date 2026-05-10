@@ -1,4 +1,7 @@
+import json
 import os
+from typing import Dict, List, Optional
+
 import litellm
 import openai
 import requests
@@ -12,7 +15,6 @@ from pr_agent.algo.ai_handlers.litellm_helpers import _handle_streaming_response
 from pr_agent.algo.utils import ReasoningEffort, get_version
 from pr_agent.config_loader import get_settings
 from pr_agent.log import get_logger
-import json
 
 MODEL_RETRIES = 2
 DUMMY_LITELLM_API_KEY = "dummy_key"  # placeholder set when no OpenAI key is configured
@@ -267,9 +269,9 @@ class LiteLLMAIHandler(BaseAiHandler):
         retry=retry_if_exception_type(openai.APIError) & retry_if_not_exception_type(openai.RateLimitError),
         stop=stop_after_attempt(MODEL_RETRIES),
     )
-    async def chat_completion(self, model: str, system: str, user: str, temperature: float = 0.2, img_path: str = None):
+    async def chat_completion(self, model: str, system: str, user: str, temperature: float = 0.2, img_path: str = None, tools: Optional[List[Dict]] = None):
         try:
-            resp, finish_reason = None, None
+            resp, finish_reason, tool_calls = None, None, None
             deployment_id = self.deployment_id
             if self.azure:
                 model = 'azure/' + model
@@ -286,10 +288,10 @@ class LiteLLMAIHandler(BaseAiHandler):
                     if r.status_code == 404:
                         error_msg = f"The image link is not [alive](img_path).\nPlease repost the original image as a comment, and send the question again with 'quote reply' (see [instructions](https://pr-agent-docs.codium.ai/tools/ask/#ask-on-images-using-the-pr-code-as-context))."
                         get_logger().error(error_msg)
-                        return f"{error_msg}", "error"
+                        return f"{error_msg}", "error", None
                 except Exception as e:
                     get_logger().error(f"Error fetching image: {img_path}", e)
-                    return f"Error fetching image: {img_path}", "error"
+                    return f"Error fetching image: {img_path}", "error", None
                 messages[1]["content"] = [{"type": "text", "text": messages[1]["content"]},
                                           {"type": "image_url", "image_url": {"url": img_path}}]
 
@@ -337,6 +339,10 @@ class LiteLLMAIHandler(BaseAiHandler):
                     "timeout": get_settings().config.ai_timeout,
                     "api_base": self.api_base,
                 }
+            
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = "auto"
 
             # Add temperature only if model supports it
             if model not in self.no_support_temperature_models and not get_settings().config.custom_reasoning_model:
@@ -413,13 +419,15 @@ class LiteLLMAIHandler(BaseAiHandler):
                 kwargs["api_key"] = litellm.api_key
 
             # Get completion with automatic streaming detection
-            resp, finish_reason, response_obj = await self._get_completion(**kwargs)
+            resp, finish_reason, response_obj, tool_calls = await self._get_completion(**kwargs)
 
         except openai.RateLimitError as e:
             get_logger().error(f"Rate limit error during LLM inference: {e}")
             raise
         except openai.APIError as e:
             get_logger().warning(f"Error during LLM inference: {e}")
+            raise
+        except ValueError:
             raise
         except Exception as e:
             get_logger().warning(f"Unknown error during LLM inference: {e}")
@@ -435,7 +443,7 @@ class LiteLLMAIHandler(BaseAiHandler):
         if get_settings().config.verbosity_level >= 2:
             get_logger().info(f"\nAI response:\n{resp}")
 
-        return resp, finish_reason
+        return resp, finish_reason, tool_calls
 
     async def _get_completion(self, **kwargs):
         """
@@ -449,11 +457,18 @@ class LiteLLMAIHandler(BaseAiHandler):
             resp, finish_reason = await _handle_streaming_response(response)
             # Create MockResponse for streaming since we don't have the full response object
             mock_response = MockResponse(resp, finish_reason)
-            return resp, finish_reason, mock_response
+            return resp, finish_reason, mock_response, None
         else:
             response = await acompletion(**kwargs)
             if response is None or len(response["choices"]) == 0:
                 raise openai.APIError
-            return (response["choices"][0]['message']['content'],
-                    response["choices"][0]["finish_reason"],
-                    response)
+            
+            message = response["choices"][0]['message']
+            content = message.get('content')
+            finish_reason = response["choices"][0]["finish_reason"]
+            tool_calls = message.get('tool_calls')
+            
+            return (content,
+                    finish_reason,
+                    response,
+                    tool_calls)
