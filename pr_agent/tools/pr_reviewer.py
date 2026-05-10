@@ -2,6 +2,7 @@ import copy
 import datetime
 import json
 import re
+import subprocess
 import traceback
 from collections import OrderedDict
 from functools import partial
@@ -41,6 +42,11 @@ class PRReviewer(PRTool):
     """
     The PRReviewer class is responsible for reviewing a pull request and generating feedback using an AI model.
     """
+    GITNEXUS_COMMON_SYMBOLS = {
+        "bool", "char", "class", "const", "else", "enum", "false", "for", "fprintf", "free", "if", "int",
+        "long", "malloc", "memcpy", "memset", "printf", "return", "sizeof", "snprintf", "static", "strcmp",
+        "strdup", "strlen", "strncmp", "struct", "true", "void", "while",
+    }
     
     def __init__(self, pr_url: str, is_answer: bool = False, is_auto: bool = False, args: list = None,
                  ai_handler: partial[BaseAiHandler,] = LiteLLMAIHandler):
@@ -307,6 +313,11 @@ class PRReviewer(PRTool):
             "index_commit": gitnexus_config.get("index_commit", ""),
             "max_queries": gitnexus_config.get("max_queries", 5),
             "max_symbols_per_file": gitnexus_config.get("max_symbols_per_file", 2),
+            "drift_check": gitnexus_config.get("drift_check", False),
+            "drift_repo_path": gitnexus_config.get("drift_repo_path", ""),
+            "drift_target_ref": gitnexus_config.get("drift_target_ref", ""),
+            "drift_max_commits": gitnexus_config.get("drift_max_commits", 20),
+            "drift_policy": gitnexus_config.get("drift_policy", "warn"),
         }
 
     async def _get_gitnexus_context(self) -> str:
@@ -365,6 +376,16 @@ class PRReviewer(PRTool):
 
         repo = gitnexus_config["repo"]
         sections = [self._format_gitnexus_base_context_header(gitnexus_config)]
+        drift_analysis = self._get_gitnexus_drift_analysis(gitnexus_config, candidates)
+        if drift_analysis:
+            sections.append(self._format_gitnexus_drift_analysis(drift_analysis))
+            if gitnexus_config["drift_policy"] == "skip_on_overlap" and drift_analysis["confidence"] == "LOW":
+                sections.append(
+                    "GitNexus base context queries were skipped because snapshot drift overlaps this PR. "
+                    "Use only the PR diff and the drift analysis above."
+                )
+                return "\n\n".join(sections)
+
         for candidate in candidates:
             sections.append(self._format_gitnexus_candidate_header(candidate))
 
@@ -395,6 +416,147 @@ class PRReviewer(PRTool):
             sections.append(f"Related indexed-snapshot query `{candidate['query']}`:\n{query}")
 
         return "\n\n".join(sections)
+
+    def _get_gitnexus_drift_analysis(self, gitnexus_config: Dict[str, Any],
+                                     candidates: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not gitnexus_config["drift_check"]:
+            return None
+        if not gitnexus_config["index_commit"] or not gitnexus_config["drift_repo_path"]:
+            return {
+                "status": "skipped",
+                "reason": "drift_check requires gitnexus.index_commit and gitnexus.drift_repo_path",
+            }
+
+        target_ref = (
+            gitnexus_config["drift_target_ref"] or
+            self._get_gitnexus_base_ref(gitnexus_config["base_ref"])
+        )
+        if not target_ref:
+            return {
+                "status": "skipped",
+                "reason": "drift_check could not resolve a target/base ref",
+            }
+
+        drift_files_output = self._run_gitnexus_git_command(
+            gitnexus_config["drift_repo_path"],
+            ["diff", "--name-only", gitnexus_config["index_commit"], target_ref],
+        )
+        drift_patch = self._run_gitnexus_git_command(
+            gitnexus_config["drift_repo_path"],
+            ["diff", "--unified=0", gitnexus_config["index_commit"], target_ref],
+        )
+        commits_output = self._run_gitnexus_git_command(
+            gitnexus_config["drift_repo_path"],
+            ["log", "--oneline", f"--max-count={gitnexus_config['drift_max_commits']}",
+             f"{gitnexus_config['index_commit']}..{target_ref}"],
+        )
+
+        drift_files = {line.strip().replace("\\", "/") for line in drift_files_output.splitlines() if line.strip()}
+        pr_files = {candidate["filename"].replace("\\", "/") for candidate in candidates if candidate["filename"]}
+        pr_base_files = {
+            candidate["base_file_path"].replace("\\", "/")
+            for candidate in candidates
+            if candidate["base_file_path"]
+        }
+        pr_symbols = {
+            symbol
+            for candidate in candidates
+            for symbol in candidate["symbols"]
+        }
+        drift_symbols = set(self._extract_gitnexus_candidate_symbols(drift_patch, "", 200))
+        exact_file_overlap = sorted((pr_files | pr_base_files) & drift_files)
+        related_path_overlap = self._find_gitnexus_related_paths(pr_files | pr_base_files, drift_files)
+        symbol_overlap = sorted(pr_symbols & drift_symbols)
+
+        confidence = "HIGH"
+        if related_path_overlap:
+            confidence = "MEDIUM"
+        if exact_file_overlap or symbol_overlap:
+            confidence = "LOW"
+
+        return {
+            "status": "analyzed",
+            "confidence": confidence,
+            "index_commit": gitnexus_config["index_commit"],
+            "target_ref": target_ref,
+            "drift_repo_path": gitnexus_config["drift_repo_path"],
+            "drift_files_count": len(drift_files),
+            "pr_files_count": len(pr_files),
+            "drift_symbols_count": len(drift_symbols),
+            "pr_symbols_count": len(pr_symbols),
+            "exact_file_overlap": exact_file_overlap[:20],
+            "related_path_overlap": related_path_overlap[:20],
+            "symbol_overlap": symbol_overlap[:20],
+            "recent_commits": [line for line in commits_output.splitlines() if line][:gitnexus_config["drift_max_commits"]],
+        }
+
+    @staticmethod
+    def _run_gitnexus_git_command(cwd: str, args: List[str]) -> str:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        return completed.stdout
+
+    @staticmethod
+    def _find_gitnexus_related_paths(pr_paths: set[str], drift_paths: set[str]) -> List[str]:
+        related = []
+        for pr_path in sorted(pr_paths):
+            pr_parts = [part for part in pr_path.split("/") if part]
+            if not pr_parts:
+                continue
+            pr_dir = "/".join(pr_parts[:-1])
+            pr_top = pr_parts[0]
+            for drift_path in sorted(drift_paths):
+                drift_parts = [part for part in drift_path.split("/") if part]
+                if not drift_parts:
+                    continue
+                drift_dir = "/".join(drift_parts[:-1])
+                if pr_dir and pr_dir == drift_dir:
+                    related.append(f"{pr_path} <-> {drift_path}")
+                elif pr_top == drift_parts[0] and pr_top not in {pr_path, drift_path}:
+                    related.append(f"{pr_path} <-> {drift_path}")
+                if len(related) >= 20:
+                    return related
+        return related
+
+    @staticmethod
+    def _format_gitnexus_drift_analysis(drift_analysis: Dict[str, Any]) -> str:
+        if drift_analysis["status"] == "skipped":
+            return f"GitNexus snapshot drift analysis: skipped. Reason: {drift_analysis['reason']}"
+
+        lines = [
+            "GitNexus snapshot drift analysis:",
+            f"- Indexed commit: {drift_analysis['index_commit']}",
+            f"- Target/base ref: {drift_analysis['target_ref']}",
+            f"- Drift repo path: {drift_analysis['drift_repo_path']}",
+            f"- Confidence: {drift_analysis['confidence']}",
+            f"- Drift files: {drift_analysis['drift_files_count']}; PR files: {drift_analysis['pr_files_count']}",
+            f"- Drift symbols: {drift_analysis['drift_symbols_count']}; PR symbols: {drift_analysis['pr_symbols_count']}",
+        ]
+        if drift_analysis["exact_file_overlap"]:
+            lines.append("- Exact file overlap: " + ", ".join(drift_analysis["exact_file_overlap"]))
+        if drift_analysis["related_path_overlap"]:
+            lines.append("- Related path overlap: " + "; ".join(drift_analysis["related_path_overlap"]))
+        if drift_analysis["symbol_overlap"]:
+            lines.append("- Symbol overlap: " + ", ".join(drift_analysis["symbol_overlap"]))
+        if drift_analysis["recent_commits"]:
+            lines.append("- Recent commits between indexed snapshot and target/base ref:")
+            lines.extend([f"  - {commit}" for commit in drift_analysis["recent_commits"]])
+
+        if drift_analysis["confidence"] == "HIGH":
+            lines.append("Guidance: no direct path or symbol overlap was found; GitNexus snapshot context is likely reliable.")
+        elif drift_analysis["confidence"] == "MEDIUM":
+            lines.append("Guidance: nearby paths changed after the GitNexus snapshot; use context as helpful but possibly stale.")
+        else:
+            lines.append("Guidance: direct file or symbol overlap was found; treat GitNexus context as stale for the overlapping areas.")
+
+        return "\n".join(lines)
 
     def _get_gitnexus_base_ref(self, configured_base_ref: str) -> str:
         if configured_base_ref:
@@ -488,7 +650,7 @@ class PRReviewer(PRTool):
             if not line.startswith(("+", "-")) or line.startswith(("+++", "---")):
                 continue
             for token in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", line):
-                if token.isupper() or token in {"return", "const", "static", "struct", "class", "if", "else"}:
+                if token.isupper() or token in PRReviewer.GITNEXUS_COMMON_SYMBOLS:
                     continue
                 symbols[token] = None
                 if len(symbols) >= max_symbols:
@@ -506,6 +668,8 @@ class PRReviewer(PRTool):
             if not line.startswith("+") or line.startswith("+++"):
                 continue
             for token in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{3,}\b", line):
+                if token.isupper() or token in PRReviewer.GITNEXUS_COMMON_SYMBOLS:
+                    continue
                 if token not in added_words:
                     added_words.append(token)
                 if len(added_words) >= 8:
