@@ -1,6 +1,7 @@
 import copy
 import datetime
 import json
+import re
 import traceback
 from collections import OrderedDict
 from functools import partial
@@ -14,6 +15,7 @@ from pr_agent.algo.pr_processing import (add_ai_metadata_to_diff_files,
                                          get_pr_diff,
                                          retry_with_fallback_models)
 from pr_agent.algo.token_handler import TokenHandler
+from pr_agent.algo.types import EDIT_TYPE
 from pr_agent.algo.utils import (ModelType, PRReviewHeader,
                                  convert_to_markdown_v2, github_action_output,
                                  load_yaml, show_relevant_configurations)
@@ -208,6 +210,13 @@ class PRReviewer(PRTool):
         environment = Environment(undefined=StrictUndefined)
         system_prompt = environment.from_string(get_settings().pr_review_prompt.system).render(variables)
         user_prompt = environment.from_string(get_settings().pr_review_prompt.user).render(variables)
+        gitnexus_context = await self._get_gitnexus_context()
+        if gitnexus_context:
+            user_prompt += (
+                "\n\nAdditional repository context from GitNexus MCP:\n"
+                f"{gitnexus_context}\n"
+                "Use this context only when it is relevant to concrete issues in the diff."
+            )
 
         mcp_config = self._get_mcp_config()
         if mcp_config:
@@ -271,6 +280,258 @@ class PRReviewer(PRTool):
             raise ValueError("MCP mcp.args must be a list")
 
         return {"command": command, "args": args}
+
+    def _get_gitnexus_config(self) -> Optional[Dict[str, Any]]:
+        gitnexus_config = get_settings().get("gitnexus", None)
+        if not gitnexus_config:
+            return None
+
+        if not gitnexus_config.get("enabled", False):
+            return None
+
+        command = gitnexus_config.get("command")
+        args = gitnexus_config.get("args", [])
+        if not command:
+            raise ValueError("GitNexus is enabled but gitnexus.command is not configured")
+        if not isinstance(args, list):
+            raise ValueError("GitNexus gitnexus.args must be a list")
+
+        return {
+            "command": command,
+            "args": args,
+            "mode": gitnexus_config.get("mode", "detect_changes"),
+            "repo": gitnexus_config.get("repo", ""),
+            "base_ref": gitnexus_config.get("base_ref", ""),
+            "scope": gitnexus_config.get("scope", "compare"),
+            "index_ref": gitnexus_config.get("index_ref", ""),
+            "index_commit": gitnexus_config.get("index_commit", ""),
+            "max_queries": gitnexus_config.get("max_queries", 5),
+            "max_symbols_per_file": gitnexus_config.get("max_symbols_per_file", 2),
+        }
+
+    async def _get_gitnexus_context(self) -> str:
+        gitnexus_config = self._get_gitnexus_config()
+        if not gitnexus_config:
+            return ""
+
+        from pr_agent.algo.mcp_handler import MCPHandler
+
+        try:
+            mcp_handler = MCPHandler(gitnexus_config["command"], gitnexus_config["args"])
+            async with mcp_handler as handler:
+                tools = await handler.get_openai_tools()
+                tool_names = {tool["function"]["name"] for tool in tools}
+                mode = gitnexus_config["mode"]
+                if mode == "detect_changes":
+                    return await self._get_gitnexus_detect_changes_context(handler, gitnexus_config, tool_names)
+                if mode == "base_context":
+                    return await self._get_gitnexus_base_context(handler, gitnexus_config, tool_names)
+                raise ValueError(f"Unsupported GitNexus mode: {mode}")
+        except Exception as e:
+            if get_settings().get("gitnexus.fail_on_error", False):
+                raise
+            get_logger().warning(f"Failed to fetch GitNexus context: {e}")
+            return ""
+
+    async def _get_gitnexus_detect_changes_context(self, handler, gitnexus_config: Dict[str, Any],
+                                                  tool_names: set[str]) -> str:
+        if "detect_changes" not in tool_names:
+            raise ValueError("GitNexus MCP server does not expose the detect_changes tool")
+
+        tool_args = {"scope": gitnexus_config["scope"]}
+        if gitnexus_config["repo"]:
+            tool_args["repo"] = gitnexus_config["repo"]
+        base_ref = self._get_gitnexus_base_ref(gitnexus_config["base_ref"])
+        if base_ref:
+            tool_args["base_ref"] = base_ref
+
+        get_logger().info(f"Fetching GitNexus detect_changes context with args {tool_args}")
+        context = await handler.call_tool("detect_changes", tool_args)
+        return self._format_gitnexus_context(context)
+
+    async def _get_gitnexus_base_context(self, handler, gitnexus_config: Dict[str, Any], tool_names: set[str]) -> str:
+        missing_tools = {"query", "context", "impact"} - tool_names
+        if missing_tools:
+            raise ValueError(f"GitNexus MCP server does not expose required tools: {sorted(missing_tools)}")
+
+        diff_files = self.git_provider.get_diff_files()
+        candidates = self._build_gitnexus_base_context_candidates(
+            diff_files,
+            max_files=gitnexus_config["max_queries"],
+            max_symbols_per_file=gitnexus_config["max_symbols_per_file"],
+        )
+        if not candidates:
+            return ""
+
+        repo = gitnexus_config["repo"]
+        sections = [self._format_gitnexus_base_context_header(gitnexus_config)]
+        for candidate in candidates:
+            sections.append(self._format_gitnexus_candidate_header(candidate))
+
+            should_query_symbols = candidate["edit_type"] not in {EDIT_TYPE.ADDED.name, "ADDED"}
+            for symbol in candidate["symbols"] if should_query_symbols else []:
+                context_args = {"name": symbol, "file_path": candidate["base_file_path"]}
+                impact_args = {
+                    "target": symbol,
+                    "file_path": candidate["base_file_path"],
+                    "direction": "upstream",
+                    "maxDepth": 2,
+                }
+                if repo:
+                    context_args["repo"] = repo
+                    impact_args["repo"] = repo
+
+                get_logger().info(f"Fetching GitNexus base context for {symbol} in {candidate['base_file_path']}")
+                context = self._format_gitnexus_context(await handler.call_tool("context", context_args))
+                impact = self._format_gitnexus_context(await handler.call_tool("impact", impact_args))
+                sections.append(f"Symbol `{symbol}` context from indexed snapshot:\n{context}")
+                sections.append(f"Symbol `{symbol}` impact from indexed snapshot:\n{impact}")
+
+            query_args = {"query": candidate["query"], "limit": 3}
+            if repo:
+                query_args["repo"] = repo
+            get_logger().info(f"Fetching GitNexus base query context with args {query_args}")
+            query = self._format_gitnexus_context(await handler.call_tool("query", query_args))
+            sections.append(f"Related indexed-snapshot query `{candidate['query']}`:\n{query}")
+
+        return "\n\n".join(sections)
+
+    def _get_gitnexus_base_ref(self, configured_base_ref: str) -> str:
+        if configured_base_ref:
+            return configured_base_ref
+
+        git_provider = getattr(self, "git_provider", None)
+        provider_pr = getattr(git_provider, "pr", None)
+        provider_mr = getattr(git_provider, "mr", None)
+        for pr_object in (provider_pr, provider_mr):
+            target_branch = getattr(pr_object, "target_branch", "")
+            if target_branch:
+                return target_branch
+
+        settings = get_settings()
+        config = getattr(settings, "config", None)
+        git_provider_name = getattr(config, "git_provider", "")
+        if not git_provider_name and callable(getattr(settings, "get", None)):
+            git_provider_name = settings.get("config.git_provider", "")
+        if git_provider_name == "local":
+            return self.pr_url
+
+        return ""
+
+    def _format_gitnexus_base_context_header(self, gitnexus_config: Dict[str, Any]) -> str:
+        target_ref = self._get_gitnexus_base_ref(gitnexus_config["base_ref"])
+        metadata = [
+            "GitNexus context mode: base_context.",
+            "Source: indexed stable/base snapshot, not the PR source branch after this change.",
+        ]
+        if gitnexus_config["index_ref"]:
+            metadata.append(f"Indexed ref: {gitnexus_config['index_ref']}.")
+        if gitnexus_config["index_commit"]:
+            metadata.append(f"Indexed commit: {gitnexus_config['index_commit']}.")
+        if target_ref:
+            metadata.append(f"PR target/base ref: {target_ref}.")
+        metadata.extend([
+            "Use the PR diff as the source of truth for new or changed code.",
+            "GitNexus may not include files, symbols, renames, or call relationships added after the indexed snapshot.",
+            "Do not treat missing GitNexus results as evidence that a PR symbol is unused, invalid, or absent.",
+            "Use GitNexus only to understand existing base-branch relationships and likely affected areas.",
+        ])
+        return "\n".join(metadata)
+
+    @staticmethod
+    def _format_gitnexus_candidate_header(candidate: Dict[str, Any]) -> str:
+        symbols = ", ".join(candidate["symbols"]) if candidate["symbols"] else "none"
+        return (
+            f"Changed file: {candidate['filename']}\n"
+            f"Base snapshot lookup path: {candidate['base_file_path']}\n"
+            f"Edit type: {candidate['edit_type']}\n"
+            f"Candidate symbols from PR diff: {symbols}"
+        )
+
+    def _build_gitnexus_base_context_candidates(self, diff_files: List[Any], max_files: int,
+                                                max_symbols_per_file: int) -> List[Dict[str, Any]]:
+        candidates = []
+        for diff_file in diff_files[:max_files]:
+            edit_type = getattr(diff_file, "edit_type", EDIT_TYPE.UNKNOWN)
+            edit_type_name = edit_type.name if isinstance(edit_type, EDIT_TYPE) else str(edit_type)
+            filename = getattr(diff_file, "filename", "")
+            old_filename = getattr(diff_file, "old_filename", "") or filename
+            patch = getattr(diff_file, "patch", "") or ""
+            base_file_path = old_filename if edit_type == EDIT_TYPE.DELETED else filename
+            symbols = self._extract_gitnexus_candidate_symbols(patch, filename, max_symbols_per_file)
+            candidates.append({
+                "filename": filename,
+                "base_file_path": base_file_path,
+                "edit_type": edit_type_name,
+                "symbols": symbols,
+                "query": self._build_gitnexus_query(filename, old_filename, patch, symbols),
+            })
+
+        return candidates
+
+    @staticmethod
+    def _extract_gitnexus_candidate_symbols(patch: str, filename: str, max_symbols: int) -> List[str]:
+        symbols = OrderedDict()
+        for line in patch.splitlines():
+            if line.startswith("@@"):
+                header = line.split("@@", 2)[-1].strip()
+                match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(", header)
+                if match:
+                    symbols[match.group(1)] = None
+                elif header:
+                    header_tokens = re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", header)
+                    if header_tokens:
+                        symbols[header_tokens[-1]] = None
+                if len(symbols) >= max_symbols:
+                    return list(symbols.keys())[:max_symbols]
+
+            if not line.startswith(("+", "-")) or line.startswith(("+++", "---")):
+                continue
+            for token in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", line):
+                if token.isupper() or token in {"return", "const", "static", "struct", "class", "if", "else"}:
+                    continue
+                symbols[token] = None
+                if len(symbols) >= max_symbols:
+                    return list(symbols.keys())
+
+        stem = filename.rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("-", "_")
+        if stem:
+            symbols[stem] = None
+        return list(symbols.keys())[:max_symbols]
+
+    @staticmethod
+    def _build_gitnexus_query(filename: str, old_filename: str, patch: str, symbols: List[str]) -> str:
+        added_words = []
+        for line in patch.splitlines():
+            if not line.startswith("+") or line.startswith("+++"):
+                continue
+            for token in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{3,}\b", line):
+                if token not in added_words:
+                    added_words.append(token)
+                if len(added_words) >= 8:
+                    break
+            if len(added_words) >= 8:
+                break
+
+        parts = [filename]
+        if old_filename and old_filename != filename:
+            parts.append(old_filename)
+        parts.extend(symbols)
+        parts.extend(added_words)
+        return " ".join(parts[:16])
+
+    @staticmethod
+    def _format_gitnexus_context(context: Any) -> str:
+        if isinstance(context, list):
+            text_parts = []
+            for item in context:
+                if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
+                    text_parts.append(item["text"])
+                else:
+                    text_parts.append(json.dumps(item, ensure_ascii=False))
+            return "\n".join(text_parts)
+
+        return str(context)
 
     def _prepare_pr_review(self) -> str:
         """

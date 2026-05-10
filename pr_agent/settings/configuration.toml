@@ -330,6 +330,20 @@ enabled = false
 command = ""
 args = []
 
+[gitnexus]
+enabled = false
+command = ""
+args = []
+mode = "detect_changes" # "detect_changes" for local/current worktree analysis, or "base_context" for stable indexed snapshots
+repo = ""
+scope = "compare" # "compare", "unstaged", "staged", or "all"
+base_ref = "" # defaults to the PR target branch when available
+index_ref = "" # optional stable/protected branch used to build the GitNexus index
+index_commit = "" # optional commit SHA of the indexed stable snapshot
+max_queries = 5
+max_symbols_per_file = 2
+fail_on_error = false
+
 [pr_similar_issue]
 skip_comments = false
 force_update_dataset = false
