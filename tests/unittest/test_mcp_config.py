@@ -90,6 +90,11 @@ def test_gitnexus_config_returns_command_args_and_options_when_enabled(monkeypat
         "index_commit": "abc123",
         "max_queries": 3,
         "max_symbols_per_file": 1,
+        "drift_check": True,
+        "drift_repo_path": "/tmp/repo",
+        "drift_target_ref": "origin/develop",
+        "drift_max_commits": 7,
+        "drift_policy": "skip_on_overlap",
     }))
 
     assert PRReviewer._get_gitnexus_config(object()) == {
@@ -103,6 +108,11 @@ def test_gitnexus_config_returns_command_args_and_options_when_enabled(monkeypat
         "index_commit": "abc123",
         "max_queries": 3,
         "max_symbols_per_file": 1,
+        "drift_check": True,
+        "drift_repo_path": "/tmp/repo",
+        "drift_target_ref": "origin/develop",
+        "drift_max_commits": 7,
+        "drift_policy": "skip_on_overlap",
     }
 
 
@@ -160,6 +170,110 @@ def test_gitnexus_base_context_header_warns_snapshot_is_not_pr_head(monkeypatch)
     assert "not the PR source branch" in header
     assert "Indexed ref: develop-stable" in header
     assert "Do not treat missing GitNexus results" in header
+
+
+def test_gitnexus_drift_analysis_reports_low_confidence_on_overlap(monkeypatch):
+    monkeypatch.setattr(pr_reviewer, "get_settings", lambda: type("Settings", (), {
+        "config": type("Config", (), {"git_provider": "gitlab"})(),
+    })())
+
+    reviewer = PRReviewer.__new__(PRReviewer)
+    reviewer.git_provider = type("Provider", (), {
+        "mr": type("MergeRequest", (), {"target_branch": "origin/develop"})(),
+    })()
+    commands = []
+
+    def fake_git_command(cwd, args):
+        commands.append(args)
+        if args[:2] == ["diff", "--name-only"]:
+            return "src/auth.py\nsrc/other.py\n"
+        if args[:2] == ["diff", "--unified=0"]:
+            return "@@ -1 +1 @@ validate_user\n- old\n+ new\n"
+        if args[0] == "log":
+            return "def456 change auth\nabc123 previous change\n"
+        return ""
+
+    monkeypatch.setattr(PRReviewer, "_run_gitnexus_git_command", staticmethod(fake_git_command))
+    candidates = [{
+        "filename": "src/auth.py",
+        "base_file_path": "src/auth.py",
+        "edit_type": "MODIFIED",
+        "symbols": ["validate_user"],
+        "query": "src/auth.py validate_user",
+    }]
+
+    analysis = reviewer._get_gitnexus_drift_analysis({
+        "drift_check": True,
+        "index_commit": "aaa111",
+        "drift_repo_path": "/tmp/repo",
+        "drift_target_ref": "",
+        "base_ref": "",
+        "drift_max_commits": 20,
+    }, candidates)
+
+    assert analysis["confidence"] == "LOW"
+    assert analysis["exact_file_overlap"] == ["src/auth.py"]
+    assert analysis["symbol_overlap"] == ["validate_user"]
+    assert analysis["recent_commits"] == ["def456 change auth", "abc123 previous change"]
+    assert commands[0] == ["diff", "--name-only", "aaa111", "origin/develop"]
+
+
+def test_gitnexus_drift_analysis_reports_high_confidence_without_overlap(monkeypatch):
+    reviewer = PRReviewer.__new__(PRReviewer)
+    reviewer.git_provider = type("Provider", (), {})()
+
+    def fake_git_command(cwd, args):
+        if args[:2] == ["diff", "--name-only"]:
+            return "docs/readme.md\n"
+        if args[:2] == ["diff", "--unified=0"]:
+            return "@@ -1 +1 @@ docs\n- old\n+ new\n"
+        if args[0] == "log":
+            return "def456 docs update\n"
+        return ""
+
+    monkeypatch.setattr(PRReviewer, "_run_gitnexus_git_command", staticmethod(fake_git_command))
+    candidates = [{
+        "filename": "src/auth.py",
+        "base_file_path": "src/auth.py",
+        "edit_type": "MODIFIED",
+        "symbols": ["validate_user"],
+        "query": "src/auth.py validate_user",
+    }]
+
+    analysis = reviewer._get_gitnexus_drift_analysis({
+        "drift_check": True,
+        "index_commit": "aaa111",
+        "drift_repo_path": "/tmp/repo",
+        "drift_target_ref": "origin/develop",
+        "base_ref": "",
+        "drift_max_commits": 20,
+    }, candidates)
+
+    assert analysis["confidence"] == "HIGH"
+    assert analysis["exact_file_overlap"] == []
+    assert analysis["symbol_overlap"] == []
+
+
+def test_format_gitnexus_drift_analysis_includes_confidence_guidance():
+    text = PRReviewer._format_gitnexus_drift_analysis({
+        "status": "analyzed",
+        "confidence": "LOW",
+        "index_commit": "aaa111",
+        "target_ref": "origin/develop",
+        "drift_repo_path": "/tmp/repo",
+        "drift_files_count": 2,
+        "pr_files_count": 1,
+        "drift_symbols_count": 2,
+        "pr_symbols_count": 1,
+        "exact_file_overlap": ["src/auth.py"],
+        "related_path_overlap": [],
+        "symbol_overlap": ["validate_user"],
+        "recent_commits": ["def456 change auth"],
+    })
+
+    assert "Confidence: LOW" in text
+    assert "Exact file overlap: src/auth.py" in text
+    assert "treat GitNexus context as stale" in text
 
 
 def test_gitnexus_base_ref_prefers_configured_value(monkeypatch):

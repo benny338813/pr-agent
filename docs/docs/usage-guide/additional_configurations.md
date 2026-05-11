@@ -49,6 +49,26 @@ max_symbols_per_file = 2
 fail_on_error = false
 ```
 
+When the GitNexus index is older than the pull request target branch, enable drift analysis to compare the indexed
+snapshot with the current target/base ref before trusting the snapshot context. PR-Agent compares files and symbols
+changed between `index_commit..drift_target_ref` against the PR diff and labels the context as `HIGH`, `MEDIUM`, or
+`LOW` confidence.
+
+```toml
+[gitnexus]
+enabled = true
+command = "npx"
+args = ["gitnexus", "mcp"]
+mode = "base_context"
+repo = "my-repo"
+index_commit = "abc1234"
+drift_check = true
+drift_repo_path = "/srv/gitnexus-workspaces/my-repo"
+drift_target_ref = "origin/develop" # optional; defaults to the PR target branch when available
+drift_max_commits = 20
+drift_policy = "warn" # or "skip_on_overlap"
+```
+
 ## Custom HTTP Headers for AI Models
 
 If you need to send custom HTTP headers to the AI model provider (for example, to identify your request with a specific model name or for API gateway authentication), you can use the `LITELLM.EXTRA_HEADERS` configuration.
