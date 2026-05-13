@@ -73,6 +73,8 @@ class PRReviewer(PRTool):
         self.ai_handler.main_pr_language = self.main_language
         self.patches_diff = None
         self.prediction = None
+        self.gitnexus_context_status = "not_used"
+        self.gitnexus_context_mode = ""
         answer_str, question_str = self._get_user_answers()
         self.pr_description, self.pr_description_files = (
             self.git_provider.get_pr_description(split_changes_walkthrough=True))
@@ -107,6 +109,7 @@ class PRReviewer(PRTool):
             "enable_custom_labels": get_settings().config.enable_custom_labels,
             "is_ai_metadata":  get_settings().get("config.enable_ai_metadata", False),
             "related_tickets": get_settings().get('related_tickets', []),
+            "context_usage_summary": "",
             'duplicate_prompt_examples': get_settings().config.get('duplicate_prompt_examples', False),
             "date": datetime.datetime.now().strftime('%Y-%m-%d'),
         }
@@ -213,10 +216,18 @@ class PRReviewer(PRTool):
     async def _get_prediction(self, model: str) -> str:
         variables = copy.deepcopy(self.vars)
         variables["diff"] = self.patches_diff
+        gitnexus_context = await self._get_gitnexus_context()
+        if gitnexus_context:
+            self.gitnexus_context_status = "used"
+            gitnexus_config = self._get_gitnexus_config() or {}
+            self.gitnexus_context_mode = gitnexus_config.get("mode", "")
+        else:
+            self.gitnexus_context_status = "not_used"
+            self.gitnexus_context_mode = ""
+        variables["context_usage_summary"] = self._get_context_usage_summary_text()
         environment = Environment(undefined=StrictUndefined)
         system_prompt = environment.from_string(get_settings().pr_review_prompt.system).render(variables)
         user_prompt = environment.from_string(get_settings().pr_review_prompt.user).render(variables)
-        gitnexus_context = await self._get_gitnexus_context()
         if gitnexus_context:
             user_prompt += (
                 "\n\nAdditional repository context from GitNexus MCP:\n"
@@ -747,7 +758,43 @@ class PRReviewer(PRTool):
         if markdown_text == None or len(markdown_text) == 0:
             markdown_text = ""
 
+        markdown_text = self._get_review_context_summary_markdown() + markdown_text
         return markdown_text
+
+    def _get_context_usage_summary_text(self) -> str:
+        related_tickets = self.vars.get("related_tickets", []) if hasattr(self, "vars") else []
+        ticket_count = len(related_tickets)
+        jira_text = f"Jira ticket context: used, {ticket_count} ticket(s)." if ticket_count else "Jira ticket context: not used."
+        gitnexus_mode = getattr(self, "gitnexus_context_mode", "")
+        if getattr(self, "gitnexus_context_status", "not_used") == "used":
+            gitnexus_text = f"GitNexus context: used, mode={gitnexus_mode or 'unknown'}."
+        else:
+            gitnexus_text = "GitNexus context: not used."
+        return "\n".join([
+            jira_text,
+            gitnexus_text,
+            "The final review output must disclose this context usage to the reviewer.",
+        ])
+
+    def _get_review_context_summary_markdown(self) -> str:
+        related_tickets = self.vars.get("related_tickets", []) if hasattr(self, "vars") else []
+        ticket_count = len(related_tickets)
+        if ticket_count:
+            jira_line = f"Jira：已使用 {ticket_count} 筆 ticket"
+        else:
+            jira_line = "Jira：未使用"
+
+        if getattr(self, "gitnexus_context_status", "not_used") == "used":
+            mode = getattr(self, "gitnexus_context_mode", "") or "unknown"
+            gitnexus_line = f"GitNexus：已使用 {mode}"
+        else:
+            gitnexus_line = "GitNexus：未使用"
+
+        return (
+            "### 本次 Review 使用的上下文\n\n"
+            f"- {jira_line}\n"
+            f"- {gitnexus_line}\n\n"
+        )
 
     def _get_user_answers(self) -> Tuple[str, str]:
         """
