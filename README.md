@@ -31,6 +31,51 @@ Try the free version on our website.
 PR-Agent is an open-source, AI-powered code review agent and a community-maintained legacy project of Qodo. It is distinct from Qodo’s primary AI code review offering, which provides a feature-rich, context-aware experience. Qodo now offers a free tier that integrates seamlessly with GitHub, GitLab, Bitbucket, and Azure DevOps for high-quality automated reviews.
 
 
+## 中文說明：本 Fork 的定位
+
+此 fork 基於 [The-PR-Agent/pr-agent](https://github.com/The-PR-Agent/pr-agent) / Qodo PR-Agent 開源專案延伸，主要目標是讓 PR-Agent 能更順地用在公司內部 GitLab MR review 流程。
+
+本版本新增與整理的重點：
+
+- GitLab 內部環境支援：可透過環境變數設定 GitLab URL、token 與 auth type。
+- Ainexus / OpenAI-compatible LLM：可用 `openai.key_env` 從環境變數載入公司內部 LLM token。
+- Jira PAT ticket context：支援從 MR 描述或 branch name 擷取 Jira ticket，並以 PAT 讀取需求內容。
+- GitNexus MCP context：可選擇性載入 GitNexus 的 code graph context，改善大型專案 code review 的上下文品質。
+- GitNexus drift analysis：當 GitNexus index 來自較舊 stable/protected branch 時，會檢查 index snapshot 到目前 target branch 的中間變更是否和本次 PR diff 重疊。
+- Smoke script：提供 `scripts/smoke_gitlab_jira_ainexus.py` 快速檢查 GitLab、Jira、Ainexus token 與基本連線。
+
+快速設定範例：
+
+```toml
+[config]
+model = "openai/qwen/qwen3.6-35b-a3b-fp8"
+fallback_models = []
+custom_model_max_tokens = 32768
+max_model_tokens = 32768
+token_encoding = "cl100k_base"
+
+[openai]
+api_base = "https://ainexus.example.com/api/external/v1"
+key_env = "AI_NEXUUS_PAT"
+
+[jira]
+jira_base_url = "https://jira.example.com"
+jira_api_token_env = "JIRA_BOT_PAT"
+
+[gitnexus]
+enabled = true
+command = "npx"
+args = ["gitnexus", "mcp"]
+mode = "base_context"
+repo = "my-project"
+index_commit = "abc1234"
+drift_check = true
+drift_repo_path = "/srv/gitnexus-workspaces/my-project"
+drift_target_ref = "origin/develop"
+```
+
+更多中文使用說明請見 docs/Wiki 的「內部 Fork 使用說明」。
+
 ## Big News for PR-Agent
 
 PR-Agent has a new home!

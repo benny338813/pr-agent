@@ -14,6 +14,7 @@ nav:
     - Introduction: 'usage-guide/introduction.md'
     - Configuration File: 'usage-guide/configuration_options.md'
     - Usage and Automation: 'usage-guide/automations_and_usage.md'
+    - Internal Fork Guide zh-TW: 'usage-guide/internal_fork_zh.md'
     - Managing Mail Notifications: 'usage-guide/mail_notifications.md'
     - Changing a Model: 'usage-guide/changing_a_model.md'
     - Additional Configurations: 'usage-guide/additional_configurations.md'
