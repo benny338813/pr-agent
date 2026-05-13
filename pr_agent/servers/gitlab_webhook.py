@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 import os
@@ -20,6 +21,7 @@ from pr_agent.git_providers.utils import apply_repo_settings
 from pr_agent.log import LoggingFormat, get_logger, setup_logger
 from pr_agent.secret_providers import get_secret_provider
 from pr_agent.git_providers import get_git_provider_with_context
+from pr_agent.servers.gitnexus_mr_indexer import GitNexusMRIndexer, GitNexusMRPayload
 
 setup_logger(fmt=LoggingFormat.JSON, level=get_settings().get("CONFIG.LOG_LEVEL", "DEBUG"))
 router = APIRouter()
@@ -44,6 +46,7 @@ async def _perform_commands_gitlab(commands_conf: str, agent: PRAgent, api_url: 
         return
     if not should_process_pr_logic(data): # Here we already updated the configurations
         return
+    await _prepare_gitnexus_for_mr(data)
     commands = get_settings().get(f"gitlab.{commands_conf}", {})
     get_settings().set("config.is_auto_command", True)
     for command in commands:
@@ -58,6 +61,81 @@ async def _perform_commands_gitlab(commands_conf: str, agent: PRAgent, api_url: 
                 await agent.handle_request(api_url, new_command)
         except Exception as e:
             get_logger().error(f"Failed to perform command {command}: {e}")
+
+
+def _get_gitlab_mr_payload(data: dict) -> GitNexusMRPayload | None:
+    project = data.get("project") or {}
+    attributes = data.get("object_attributes") or {}
+    last_commit = attributes.get("last_commit") or data.get("last_commit") or {}
+    project_id = project.get("id") or attributes.get("target_project_id")
+    mr_iid = attributes.get("iid")
+    source_sha = last_commit.get("id") or attributes.get("last_commit_id") or attributes.get("sha")
+    repo_url = (
+        project.get("git_http_url") or
+        project.get("http_url") or
+        project.get("web_url")
+    )
+    project_path = project.get("path_with_namespace") or project.get("name") or ""
+    source_branch = attributes.get("source_branch", "")
+    if not all([project_id, mr_iid, source_sha, repo_url, project_path]):
+        return None
+    return GitNexusMRPayload(
+        project_id=str(project_id),
+        project_path=str(project_path),
+        repo_url=str(repo_url),
+        mr_iid=str(mr_iid),
+        source_branch=str(source_branch),
+        source_sha=str(source_sha),
+    )
+
+
+async def _prepare_gitnexus_for_mr(data: dict):
+    settings = get_settings()
+    if not settings.get("gitnexus_indexer.enabled", False):
+        return None
+
+    payload = _get_gitlab_mr_payload(data)
+    if not payload:
+        get_logger().warning("Skipping GitNexus MR indexer: missing GitLab MR metadata")
+        return None
+
+    indexer = GitNexusMRIndexer(settings)
+    if settings.get("gitnexus_indexer.cleanup_on_webhook", True):
+        await asyncio.to_thread(indexer.cleanup_expired)
+
+    try:
+        result = await asyncio.to_thread(indexer.prepare, payload)
+    except Exception as e:
+        get_logger().warning(f"GitNexus MR indexer failed: {e}")
+        return None
+
+    if not result.ready:
+        get_logger().warning(f"GitNexus MR index is not ready: {result.message}")
+        return result
+
+    gitnexus_runtime_config = {
+        "enabled": True,
+        "command": settings.get("gitnexus_indexer.mcp_command", "npx"),
+        "args": list(settings.get("gitnexus_indexer.mcp_args", ["gitnexus", "mcp"])),
+        "mode": "pr_head_context",
+        "repo": result.repo,
+        "working_dir": str(result.repo_path),
+        "index_ref": payload.source_branch,
+        "index_commit": result.index_commit,
+        "max_queries": settings.get("gitnexus_indexer.max_queries", 5),
+        "max_symbols_per_file": settings.get("gitnexus_indexer.max_symbols_per_file", 2),
+        "fail_on_error": settings.get("gitnexus_indexer.fail_on_error", False),
+    }
+    settings.set("gitnexus", gitnexus_runtime_config)
+    get_logger().info(
+        "GitNexus MR index prepared",
+        artifact={
+            "repo_path": str(result.repo_path),
+            "index_commit": result.index_commit,
+            "reused": result.reused,
+        },
+    )
+    return result
 
 
 def is_bot_user(data) -> bool:

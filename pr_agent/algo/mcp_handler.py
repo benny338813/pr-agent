@@ -2,9 +2,10 @@ from typing import Any, Dict, List
 
 
 class MCPHandler:
-    def __init__(self, command: str, args: List[str]):
+    def __init__(self, command: str, args: List[str], cwd: str = None):
         self.command = command
         self.args = args
+        self.cwd = cwd
         self.session = None
         self.stdio_client = None
 
@@ -15,7 +16,7 @@ class MCPHandler:
         except ImportError as e:
             raise RuntimeError("MCP integration requires the optional 'mcp' Python package to be installed") from e
 
-        self.server_params = StdioServerParameters(command=self.command, args=self.args)
+        self.server_params = StdioServerParameters(command=self.command, args=self.args, cwd=self.cwd)
         self.stdio_client = stdio_client(self.server_params)
         self.read, self.write = await self.stdio_client.__aenter__()
         self.session = ClientSession(self.read, self.write)

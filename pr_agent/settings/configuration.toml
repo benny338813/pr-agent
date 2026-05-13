@@ -346,12 +346,13 @@ args = []
 enabled = false
 command = ""
 args = []
-mode = "detect_changes" # "detect_changes" for local/current worktree analysis, or "base_context" for stable indexed snapshots
+mode = "detect_changes" # "detect_changes", "base_context", or "pr_head_context"
 repo = ""
 scope = "compare" # "compare", "unstaged", "staged", or "all"
 base_ref = "" # defaults to the PR target branch when available
 index_ref = "" # optional stable/protected branch used to build the GitNexus index
 index_commit = "" # optional commit SHA of the indexed stable snapshot
+working_dir = "" # optional cwd for starting the GitNexus MCP server
 max_queries = 5
 max_symbols_per_file = 2
 drift_check = false
@@ -359,6 +360,23 @@ drift_repo_path = "" # local git checkout used to compare index_commit..target/b
 drift_target_ref = "" # optional target/base ref override for drift_check
 drift_max_commits = 20
 drift_policy = "warn" # "warn" or "skip_on_overlap"
+fail_on_error = false
+
+[gitnexus_indexer]
+enabled = false # GitLab webhook can build a per-MR GitNexus index before auto review commands
+workspace_root = ".gitnexus-workspaces"
+analyze_command = "npx"
+analyze_args = ["gitnexus", "analyze", "."]
+mcp_command = "npx"
+mcp_args = ["gitnexus", "mcp"]
+timeout_seconds = 300
+max_parallel_jobs = 2
+ttl_hours = 72
+reuse_existing_index = true
+per_mr_latest_only = true
+cleanup_on_webhook = true
+max_queries = 5
+max_symbols_per_file = 2
 fail_on_error = false
 
 [pr_similar_issue]

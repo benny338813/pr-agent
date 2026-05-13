@@ -129,6 +129,63 @@ fail_on_error = false
 
 在 `base_context` 模式下，GitNexus context 代表 indexed snapshot，不代表 PR source branch 的最新狀態。PR-Agent 會明確告訴 LLM：PR diff 才是新增或修改 code 的 source of truth，GitNexus 查不到不能被當成錯誤。
 
+### GitLab Webhook 自動建立 MR Head Index
+
+如果公司專案跑一次 `gitnexus analyze` 約數分鐘且可接受，可以讓 GitLab webhook 在 MR 開啟或 push 更新後，先 clone MR source commit 並建立該 commit 專屬的 GitNexus index，再執行 PR-Agent review。
+
+這個模式適合你希望 review 使用「PR 修改後的 branch head」作為 GitNexus context，而不是較舊的 stable/base snapshot。
+
+```toml
+[gitnexus_indexer]
+enabled = true
+workspace_root = "/var/lib/pr-agent/gitnexus-workspaces"
+analyze_command = "npx"
+analyze_args = ["gitnexus", "analyze", "."]
+mcp_command = "npx"
+mcp_args = ["gitnexus", "mcp"]
+timeout_seconds = 300
+max_parallel_jobs = 4
+ttl_hours = 72
+reuse_existing_index = true
+per_mr_latest_only = true
+cleanup_on_webhook = true
+max_queries = 5
+max_symbols_per_file = 2
+fail_on_error = false
+```
+
+GitLab webhook 會建立類似下列路徑：
+
+```text
+/var/lib/pr-agent/gitnexus-workspaces/
+  <project-id>/
+    <mr-iid>/
+      <source-sha>/
+        repo/
+          .gitnexus/
+```
+
+不同 MR、不同 commit SHA 會使用不同 workspace，因此可以平行執行 `npx gitnexus analyze`。`max_parallel_jobs` 只用來限制同一個 PR-Agent process 同時跑太多分析工作，避免機器 CPU、RAM 或磁碟 IO 被打滿。
+
+當 index 建立完成後，PR-Agent 會在同一次 review 裡自動注入：
+
+```toml
+[gitnexus]
+enabled = true
+mode = "pr_head_context"
+command = "npx"
+args = ["gitnexus", "mcp"]
+working_dir = "/var/lib/pr-agent/gitnexus-workspaces/<project-id>/<mr-iid>/<source-sha>/repo"
+index_ref = "<source-branch>"
+index_commit = "<source-sha>"
+```
+
+`pr_head_context` 代表 GitNexus index 來自 MR source branch head。LLM 會被告知：PR diff 仍是 review finding 的 source of truth，而 GitNexus 可用來理解目前 MR head 的 symbol、call graph 與影響範圍。
+
+若同一個 MR 又 push 新 commit，`per_mr_latest_only = true` 會避免較舊 SHA 的分析結果被拿來做 review。若 GitNexus analyze timeout 或失敗，PR-Agent 會記錄 warning，並 fallback 成沒有 GitNexus context 的一般 review。
+
+`ttl_hours` 與 `cleanup_on_webhook` 用來回收舊 workspace，避免 `.gitnexus` index 長期累積。
+
 ## Drift Analysis
 
 若 GitNexus index 是較舊的 stable snapshot，可以啟用 drift analysis：
@@ -161,9 +218,9 @@ target/base ref -> PR source branch 的本次 PR diff
 
 ## 建議的 CI 流程
 
-不要在每個 MR review 前跑完整 `gitnexus analyze`。大 repo 會很慢，也浪費空間。
+如果每次 MR 跑完整 `gitnexus analyze` 太慢，仍可使用 stable/base snapshot 流程。大 repo 可以先用 `gitnexus_indexer` 實測耗時；若可接受，MR head index 的準確度通常最好。若不可接受，再改用 stable snapshot + drift analysis。
 
-建議流程：
+stable snapshot 建議流程：
 
 ```text
 protected branch 定期或 merge 後：
