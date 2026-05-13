@@ -95,6 +95,7 @@ def test_gitnexus_config_returns_command_args_and_options_when_enabled(monkeypat
         "drift_target_ref": "origin/develop",
         "drift_max_commits": 7,
         "drift_policy": "skip_on_overlap",
+        "working_dir": "/tmp/gitnexus/repo",
     }))
 
     assert PRReviewer._get_gitnexus_config(object()) == {
@@ -113,6 +114,7 @@ def test_gitnexus_config_returns_command_args_and_options_when_enabled(monkeypat
         "drift_target_ref": "origin/develop",
         "drift_max_commits": 7,
         "drift_policy": "skip_on_overlap",
+        "working_dir": "/tmp/gitnexus/repo",
     }
 
 
@@ -329,7 +331,7 @@ async def test_gitnexus_context_calls_detect_changes(monkeypatch):
     class FakeMCPHandler:
         last_args = None
 
-        def __init__(self, command, args):
+        def __init__(self, command, args, cwd=None):
             self.command = command
             self.args = args
 
@@ -379,7 +381,7 @@ async def test_gitnexus_base_context_uses_query_context_and_impact(monkeypatch):
     class FakeMCPHandler:
         calls = []
 
-        def __init__(self, command, args):
+        def __init__(self, command, args, cwd=None):
             self.command = command
             self.args = args
 
@@ -432,4 +434,70 @@ async def test_gitnexus_base_context_uses_query_context_and_impact(monkeypatch):
     assert FakeMCPHandler.calls[0][1]["file_path"] == "fabrics.c"
     assert FakeMCPHandler.calls[-1][1]["query"].startswith("new.c")
     assert "Source: indexed stable/base snapshot" in context
+    assert "query result" in context
+
+
+@pytest.mark.asyncio
+async def test_gitnexus_pr_head_context_uses_working_dir_and_head_guidance(monkeypatch):
+    monkeypatch.setattr(pr_reviewer, "get_settings", lambda: _settings(gitnexus_config={
+        "enabled": True,
+        "command": "node",
+        "args": ["gitnexus.js", "mcp"],
+        "mode": "pr_head_context",
+        "repo": "nvme-cli",
+        "working_dir": "/tmp/gitnexus/42/7/abc123/repo",
+        "index_ref": "feature/test",
+        "index_commit": "abc123",
+        "max_queries": 1,
+        "max_symbols_per_file": 1,
+    }))
+
+    class FakeMCPHandler:
+        init_args = None
+        calls = []
+
+        def __init__(self, command, args, cwd=None):
+            FakeMCPHandler.init_args = (command, args, cwd)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+        async def get_openai_tools(self):
+            return [
+                {"function": {"name": "query"}},
+                {"function": {"name": "context"}},
+                {"function": {"name": "impact"}},
+            ]
+
+        async def call_tool(self, name, arguments):
+            FakeMCPHandler.calls.append((name, arguments))
+            return [{"type": "text", "text": f"{name} result"}]
+
+    import pr_agent.algo.mcp_handler as mcp_handler
+
+    monkeypatch.setattr(mcp_handler, "MCPHandler", FakeMCPHandler)
+    reviewer = PRReviewer.__new__(PRReviewer)
+    reviewer.git_provider = type("Provider", (), {
+        "mr": type("MergeRequest", (), {"target_branch": "develop"})(),
+        "get_diff_files": lambda self: [
+            FilePatchInfo(
+                base_file="",
+                head_file="",
+                patch="@@ -1,3 +1,3 @@ fabrics_connect\n- old\n+ new",
+                filename="fabrics.c",
+                edit_type=EDIT_TYPE.MODIFIED,
+            ),
+        ],
+    })()
+    reviewer.pr_url = "https://gitlab.example.com/group/repo/-/merge_requests/1"
+
+    context = await reviewer._get_gitnexus_context()
+
+    assert FakeMCPHandler.init_args == ("node", ["gitnexus.js", "mcp"], "/tmp/gitnexus/42/7/abc123/repo")
+    assert [name for name, _ in FakeMCPHandler.calls] == ["context", "impact", "query"]
+    assert "Source: indexed MR source branch head" in context
+    assert "Indexed commit: abc123" in context
     assert "query result" in context

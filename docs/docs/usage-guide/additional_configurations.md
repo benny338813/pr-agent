@@ -49,6 +49,34 @@ max_symbols_per_file = 2
 fail_on_error = false
 ```
 
+For GitLab webhook deployments where a two-minute GitNexus analysis is acceptable, PR-Agent can build an isolated
+MR-head index before running the automatic review commands. Each MR source commit gets its own workspace, so multiple
+MRs can be indexed in parallel without sharing a checkout or `.gitnexus` directory.
+
+```toml
+[gitnexus_indexer]
+enabled = true
+workspace_root = "/var/lib/pr-agent/gitnexus-workspaces"
+analyze_command = "npx"
+analyze_args = ["gitnexus", "analyze", "."]
+mcp_command = "npx"
+mcp_args = ["gitnexus", "mcp"]
+timeout_seconds = 300
+max_parallel_jobs = 4
+ttl_hours = 72
+reuse_existing_index = true
+per_mr_latest_only = true
+cleanup_on_webhook = true
+max_queries = 5
+max_symbols_per_file = 2
+fail_on_error = false
+```
+
+When this is enabled, the GitLab webhook prepares `workspace_root/<project-id>/<mr-iid>/<source-sha>/repo`, runs
+`gitnexus analyze` there, then injects a request-local `[gitnexus]` configuration using `mode = "pr_head_context"` and
+starts the GitNexus MCP server from that workspace. If analysis fails or times out, PR-Agent logs the failure and keeps
+the normal review flow running without GitNexus context.
+
 When the GitNexus index is older than the pull request target branch, enable drift analysis to compare the indexed
 snapshot with the current target/base ref before trusting the snapshot context. PR-Agent compares files and symbols
 changed between `index_commit..drift_target_ref` against the PR diff and labels the context as `HIGH`, `MEDIUM`, or

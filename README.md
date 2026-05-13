@@ -41,6 +41,7 @@ PR-Agent is an open-source, AI-powered code review agent and a community-maintai
 - Ainexus / OpenAI-compatible LLM：可用 `openai.key_env` 從環境變數載入公司內部 LLM token。
 - Jira PAT ticket context：支援從 MR 描述或 branch name 擷取 Jira ticket，並以 PAT 讀取需求內容。
 - GitNexus MCP context：可選擇性載入 GitNexus 的 code graph context，改善大型專案 code review 的上下文品質。
+- GitLab webhook GitNexus MR indexer：MR 開啟或 push 更新後，可先為該 source commit 建立獨立 GitNexus index，再交給 PR-Agent review 使用。
 - GitNexus drift analysis：當 GitNexus index 來自較舊 stable/protected branch 時，會檢查 index snapshot 到目前 target branch 的中間變更是否和本次 PR diff 重疊。
 - Smoke script：提供 `scripts/smoke_gitlab_jira_ainexus.py` 快速檢查 GitLab、Jira、Ainexus token 與基本連線。
 
@@ -72,6 +73,12 @@ index_commit = "abc1234"
 drift_check = true
 drift_repo_path = "/srv/gitnexus-workspaces/my-project"
 drift_target_ref = "origin/develop"
+
+[gitnexus_indexer]
+enabled = true
+workspace_root = "/var/lib/pr-agent/gitnexus-workspaces"
+max_parallel_jobs = 4
+ttl_hours = 72
 ```
 
 更多中文使用說明請見 docs/Wiki 的「內部 Fork 使用說明」。

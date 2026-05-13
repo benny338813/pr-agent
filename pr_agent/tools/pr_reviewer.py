@@ -318,6 +318,7 @@ class PRReviewer(PRTool):
             "drift_target_ref": gitnexus_config.get("drift_target_ref", ""),
             "drift_max_commits": gitnexus_config.get("drift_max_commits", 20),
             "drift_policy": gitnexus_config.get("drift_policy", "warn"),
+            "working_dir": gitnexus_config.get("working_dir", ""),
         }
 
     async def _get_gitnexus_context(self) -> str:
@@ -328,7 +329,11 @@ class PRReviewer(PRTool):
         from pr_agent.algo.mcp_handler import MCPHandler
 
         try:
-            mcp_handler = MCPHandler(gitnexus_config["command"], gitnexus_config["args"])
+            mcp_handler = MCPHandler(
+                gitnexus_config["command"],
+                gitnexus_config["args"],
+                cwd=gitnexus_config["working_dir"] or None,
+            )
             async with mcp_handler as handler:
                 tools = await handler.get_openai_tools()
                 tool_names = {tool["function"]["name"] for tool in tools}
@@ -337,6 +342,8 @@ class PRReviewer(PRTool):
                     return await self._get_gitnexus_detect_changes_context(handler, gitnexus_config, tool_names)
                 if mode == "base_context":
                     return await self._get_gitnexus_base_context(handler, gitnexus_config, tool_names)
+                if mode == "pr_head_context":
+                    return await self._get_gitnexus_pr_head_context(handler, gitnexus_config, tool_names)
                 raise ValueError(f"Unsupported GitNexus mode: {mode}")
         except Exception as e:
             if get_settings().get("gitnexus.fail_on_error", False):
@@ -361,6 +368,14 @@ class PRReviewer(PRTool):
         return self._format_gitnexus_context(context)
 
     async def _get_gitnexus_base_context(self, handler, gitnexus_config: Dict[str, Any], tool_names: set[str]) -> str:
+        return await self._get_gitnexus_indexed_context(handler, gitnexus_config, tool_names, "base_context")
+
+    async def _get_gitnexus_pr_head_context(self, handler, gitnexus_config: Dict[str, Any],
+                                            tool_names: set[str]) -> str:
+        return await self._get_gitnexus_indexed_context(handler, gitnexus_config, tool_names, "pr_head_context")
+
+    async def _get_gitnexus_indexed_context(self, handler, gitnexus_config: Dict[str, Any], tool_names: set[str],
+                                            mode: str) -> str:
         missing_tools = {"query", "context", "impact"} - tool_names
         if missing_tools:
             raise ValueError(f"GitNexus MCP server does not expose required tools: {sorted(missing_tools)}")
@@ -375,8 +390,12 @@ class PRReviewer(PRTool):
             return ""
 
         repo = gitnexus_config["repo"]
-        sections = [self._format_gitnexus_base_context_header(gitnexus_config)]
-        drift_analysis = self._get_gitnexus_drift_analysis(gitnexus_config, candidates)
+        if mode == "pr_head_context":
+            sections = [self._format_gitnexus_pr_head_context_header(gitnexus_config)]
+            drift_analysis = None
+        else:
+            sections = [self._format_gitnexus_base_context_header(gitnexus_config)]
+            drift_analysis = self._get_gitnexus_drift_analysis(gitnexus_config, candidates)
         if drift_analysis:
             sections.append(self._format_gitnexus_drift_analysis(drift_analysis))
             if gitnexus_config["drift_policy"] == "skip_on_overlap" and drift_analysis["confidence"] == "LOW":
@@ -598,6 +617,22 @@ class PRReviewer(PRTool):
             "Do not treat missing GitNexus results as evidence that a PR symbol is unused, invalid, or absent.",
             "Use GitNexus only to understand existing base-branch relationships and likely affected areas.",
         ])
+        return "\n".join(metadata)
+
+    @staticmethod
+    def _format_gitnexus_pr_head_context_header(gitnexus_config: Dict[str, Any]) -> str:
+        metadata = [
+            "GitNexus context mode: pr_head_context.",
+            "Source: indexed MR source branch head, prepared from the same commit being reviewed.",
+            "Use the PR diff as the source of truth for review findings.",
+            "Use GitNexus to understand current MR-head symbols, call relationships, and likely affected areas.",
+        ]
+        if gitnexus_config["index_ref"]:
+            metadata.append(f"Indexed ref: {gitnexus_config['index_ref']}.")
+        if gitnexus_config["index_commit"]:
+            metadata.append(f"Indexed commit: {gitnexus_config['index_commit']}.")
+        if gitnexus_config["working_dir"]:
+            metadata.append(f"GitNexus workspace: {gitnexus_config['working_dir']}.")
         return "\n".join(metadata)
 
     @staticmethod
