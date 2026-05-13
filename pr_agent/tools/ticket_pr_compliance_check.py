@@ -1,5 +1,8 @@
+import os
 import re
 import traceback
+
+import requests
 
 from pr_agent.config_loader import get_settings
 from pr_agent.git_providers import GithubProvider
@@ -12,27 +15,145 @@ GITHUB_TICKET_PATTERN = re.compile(
 )
 # Option A: issue number at start of branch or after /, followed by - or end (e.g. feature/1-test-issue, 123-fix)
 BRANCH_ISSUE_PATTERN = re.compile(r"(?:^|/)(\d{1,6})(?=-|$)")
+JIRA_TICKET_PATTERN = re.compile(
+    r"(?:https?://[^\s/]+(?:/[^\s/]+)*/browse/)?\b([A-Z][A-Z0-9]{1,9}-\d{1,7})\b"
+)
 
 def find_jira_tickets(text):
-    # Regular expression patterns for JIRA tickets
-    patterns = [
-        r'\b[A-Z]{2,10}-\d{1,7}\b',  # Standard JIRA ticket format (e.g., PROJ-123)
-        r'(?:https?://[^\s/]+/browse/)?([A-Z]{2,10}-\d{1,7})\b'  # JIRA URL or just the ticket
-    ]
+    if not text:
+        return []
+    return list(dict.fromkeys(JIRA_TICKET_PATTERN.findall(text)))
 
-    tickets = set()
-    for pattern in patterns:
-        matches = re.findall(pattern, text)
-        for match in matches:
-            if isinstance(match, tuple):
-                # If it's a tuple (from the URL pattern), take the last non-empty group
-                ticket = next((m for m in reversed(match) if m), None)
-            else:
-                ticket = match
+
+def _get_jira_setting(name: str, default=""):
+    settings = get_settings()
+    return (
+        settings.get(f"jira.{name}", None) or
+        settings.get(f"JIRA.{name.upper()}", None) or
+        settings.get(name, None) or
+        default
+    )
+
+
+def _get_jira_config():
+    base_url = (_get_jira_setting("jira_base_url") or os.getenv("JIRA_BASE_URL", "")).rstrip("/")
+    token = _get_jira_setting("jira_api_token")
+    token_env = _get_jira_setting("jira_api_token_env")
+    if token_env:
+        token = os.getenv(token_env, token)
+    elif not token:
+        token = os.getenv("JIRA_BENNY_BOT_PAT", token)
+    email = _get_jira_setting("jira_api_email")
+    timeout = int(_get_jira_setting("jira_timeout", 30))
+    return {
+        "base_url": base_url,
+        "token": token,
+        "email": email,
+        "timeout": timeout,
+    }
+
+
+def _get_jira_ticket_text(git_provider):
+    parts = []
+    for method_name in ("get_user_description", "get_pr_description"):
+        method = getattr(git_provider, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            value = method()
+            if isinstance(value, tuple):
+                value = value[0]
+            if value:
+                parts.append(str(value))
+        except Exception as e:
+            get_logger().debug(f"Failed to read PR description for Jira ticket extraction: {e}")
+    try:
+        branch = git_provider.get_pr_branch()
+        if branch:
+            parts.append(str(branch))
+    except Exception as e:
+        get_logger().debug(f"Failed to read PR branch for Jira ticket extraction: {e}")
+    return "\n".join(parts)
+
+
+def _extract_jira_ticket_keys(git_provider):
+    return find_jira_tickets(_get_jira_ticket_text(git_provider))[:3]
+
+
+def _jira_auth_headers(config):
+    headers = {"Accept": "application/json"}
+    if config["email"]:
+        return headers, (config["email"], config["token"])
+    headers["Authorization"] = f"Bearer {config['token']}"
+    return headers, None
+
+
+def _extract_jira_field_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(filter(None, (_extract_jira_field_text(item) for item in value)))
+    if isinstance(value, dict):
+        if "text" in value and isinstance(value["text"], str):
+            return value["text"]
+        return "\n".join(filter(None, (_extract_jira_field_text(item) for item in value.values())))
+    return str(value)
+
+
+def _fetch_jira_ticket(ticket_key, config, max_characters):
+    if not config["base_url"] or not config["token"]:
+        get_logger().warning("Skipping Jira ticket fetch: jira_base_url or jira_api_token is not configured")
+        return None
+
+    headers, auth = _jira_auth_headers(config)
+    url = f"{config['base_url']}/rest/api/2/issue/{ticket_key}"
+    response = requests.get(url, headers=headers, auth=auth, timeout=config["timeout"])
+    response.raise_for_status()
+    issue = response.json()
+    fields = issue.get("fields", {})
+    body = _extract_jira_field_text(fields.get("description"))
+    if len(body) > max_characters:
+        body = body[:max_characters] + "..."
+    labels = fields.get("labels") or []
+    subtasks = []
+    for subtask in fields.get("subtasks") or []:
+        subtask_key = subtask.get("key", "")
+        subtask_fields = subtask.get("fields", {})
+        subtasks.append({
+            "ticket_url": f"{config['base_url']}/browse/{subtask_key}" if subtask_key else "",
+            "title": subtask_fields.get("summary", ""),
+            "body": "",
+        })
+    return {
+        "ticket_id": issue.get("key", ticket_key),
+        "ticket_url": f"{config['base_url']}/browse/{issue.get('key', ticket_key)}",
+        "title": fields.get("summary", ""),
+        "body": body,
+        "labels": ", ".join(labels),
+        "sub_issues": subtasks,
+    }
+
+
+def fetch_jira_tickets(git_provider, max_characters):
+    ticket_keys = _extract_jira_ticket_keys(git_provider)
+    if not ticket_keys:
+        return []
+
+    config = _get_jira_config()
+    tickets_content = []
+    for ticket_key in ticket_keys:
+        try:
+            ticket = _fetch_jira_ticket(ticket_key, config, max_characters)
             if ticket:
-                tickets.add(ticket)
-
-    return list(tickets)
+                tickets_content.append(ticket)
+        except Exception as e:
+            get_logger().warning(
+                f"Failed to fetch Jira ticket {ticket_key}: {e}",
+                artifact={"traceback": traceback.format_exc()},
+            )
+    return tickets_content
 
 
 def extract_ticket_links_from_pr_description(pr_description, repo_path, base_url_html='https://github.com'):
@@ -107,7 +228,10 @@ def extract_ticket_links_from_branch_name(branch_name, repo_path, base_url_html=
 
 async def extract_tickets(git_provider):
     MAX_TICKET_CHARACTERS = 10000
+    tickets_content = []
     try:
+        tickets_content.extend(fetch_jira_tickets(git_provider, MAX_TICKET_CHARACTERS))
+
         if isinstance(git_provider, GithubProvider):
             user_description = git_provider.get_user_description()
             description_tickets = extract_ticket_links_from_pr_description(
@@ -128,8 +252,6 @@ async def extract_tickets(git_provider):
                 tickets = merged[:3]
             else:
                 tickets = merged
-            tickets_content = []
-
             if tickets:
 
                 for ticket in tickets:
@@ -188,11 +310,8 @@ async def extract_tickets(git_provider):
                         'sub_issues': sub_issues_content  # Store sub-issues content
                     })
 
-                return tickets_content
-
         elif isinstance(git_provider, AzureDevopsProvider):
             tickets_info = git_provider.get_linked_work_items()
-            tickets_content = []
             for ticket in tickets_info:
                 try:
                     ticket_body_str = ticket.get("body", "")
@@ -214,7 +333,7 @@ async def extract_tickets(git_provider):
                         f"Error processing Azure DevOps ticket: {e}",
                         artifact={"traceback": traceback.format_exc()},
                     )
-            return tickets_content
+        return tickets_content
 
     except Exception as e:
         get_logger().error(f"Error extracting tickets error= {e}",

@@ -1,5 +1,6 @@
 import difflib
 import hashlib
+import os
 import re
 import urllib.parse
 from typing import Any, Optional, Tuple, Union
@@ -30,16 +31,20 @@ class DiffNotFoundError(Exception):
 class GitLabProvider(GitProvider):
 
     def __init__(self, merge_request_url: Optional[str] = None, incremental: Optional[bool] = False):
-        gitlab_url = get_settings().get("GITLAB.URL", None)
+        gitlab_url = os.getenv("GITLAB_URL") or get_settings().get("GITLAB.URL", None)
         if not gitlab_url:
             raise ValueError("GitLab URL is not set in the config file")
         self.gitlab_url = gitlab_url
         ssl_verify = get_settings().get("GITLAB.SSL_VERIFY", True)
-        gitlab_access_token = get_settings().get("GITLAB.PERSONAL_ACCESS_TOKEN", None)
+        gitlab_access_token = (
+            os.getenv("GITLAB_PERSONAL_ACCESS_TOKEN") or
+            os.getenv("GITLAB_TOKEN") or
+            get_settings().get("GITLAB.PERSONAL_ACCESS_TOKEN", None)
+        )
         if not gitlab_access_token:
             raise ValueError("GitLab personal access token is not set in the config file")
         # Authentication method selection via configuration
-        auth_method = get_settings().get("GITLAB.AUTH_TYPE", "oauth_token")
+        auth_method = os.getenv("GITLAB_AUTH_TYPE") or get_settings().get("GITLAB.AUTH_TYPE", "oauth_token")
 
         # Basic validation of authentication type
         if auth_method not in ["oauth_token", "private_token"]:

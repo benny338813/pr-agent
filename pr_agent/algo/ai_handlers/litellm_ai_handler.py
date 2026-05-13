@@ -38,9 +38,17 @@ class LiteLLMAIHandler(BaseAiHandler):
 
         if get_settings().get("LITELLM.DISABLE_AIOHTTP", False):
             litellm.disable_aiohttp_transport = True
-        if get_settings().get("OPENAI.KEY", None):
-            openai.api_key = get_settings().openai.key
-            litellm.openai_key = get_settings().openai.key
+        openai_key = get_settings().get("OPENAI.KEY", None)
+        openai_key_env = get_settings().get("OPENAI.KEY_ENV", None)
+        if openai_key_env:
+            env_openai_key = os.getenv(openai_key_env)
+            if env_openai_key:
+                openai_key = env_openai_key
+            elif not openai_key:
+                raise ValueError(f"OPENAI.KEY_ENV is set to '{openai_key_env}', but that environment variable is not set")
+        if openai_key:
+            openai.api_key = openai_key
+            litellm.openai_key = openai_key
         elif 'OPENAI_API_KEY' not in os.environ:
             litellm.api_key = DUMMY_LITELLM_API_KEY
         if get_settings().get("aws.AWS_ACCESS_KEY_ID"):

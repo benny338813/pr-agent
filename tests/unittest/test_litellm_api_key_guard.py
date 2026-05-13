@@ -71,6 +71,26 @@ def patch_settings(monkeypatch):
     monkeypatch.setattr(litellm_handler, "get_settings", lambda: _make_settings())
 
 
+def _make_openai_key_env_settings(key_env):
+    return type("Settings", (), {
+        "config": type("Config", (), {
+            "reasoning_effort": None,
+            "ai_timeout": 30,
+            "custom_reasoning_model": False,
+            "max_model_tokens": 32000,
+            "verbosity_level": 0,
+            "seed": -1,
+            "get": lambda self, key, default=None: default,
+        })(),
+        "litellm": type("LiteLLM", (), {
+            "get": lambda self, key, default=None: default,
+        })(),
+        "get": lambda self, key, default=None: (
+            key_env if key == "OPENAI.KEY_ENV" else default
+        ),
+    })()
+
+
 def _make_anthropic_settings():
     """Settings with ANTHROPIC.KEY configured, no OPENAI.KEY.
 
@@ -102,6 +122,29 @@ def _make_anthropic_settings():
 
 
 class TestApiKeyGuard:
+
+    def test_openai_key_env_sets_litellm_openai_key(self, monkeypatch):
+        monkeypatch.setenv("AI_NEXUUS_PAT", "ainexus-pat")
+        monkeypatch.setattr(
+            litellm_handler,
+            "get_settings",
+            lambda: _make_openai_key_env_settings("AI_NEXUUS_PAT"),
+        )
+
+        LiteLLMAIHandler()
+
+        assert litellm.openai_key == "ainexus-pat"
+
+    def test_openai_key_env_missing_raises_clear_error(self, monkeypatch):
+        monkeypatch.delenv("AI_NEXUUS_PAT", raising=False)
+        monkeypatch.setattr(
+            litellm_handler,
+            "get_settings",
+            lambda: _make_openai_key_env_settings("AI_NEXUUS_PAT"),
+        )
+
+        with pytest.raises(ValueError, match="AI_NEXUUS_PAT"):
+            LiteLLMAIHandler()
 
     @pytest.mark.asyncio
     async def test_dummy_key_not_forwarded(self, monkeypatch):

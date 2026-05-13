@@ -2,6 +2,24 @@
 enable_review_labels_effort = true
 enable_auto_approval = true
 
+[config]
+model = "openai/qwen/qwen3.6-35b-a3b-fp8"
+fallback_models = []
+custom_model_max_tokens = 32768
+max_model_tokens = 32768
+token_encoding = "cl100k_base"
+
+[openai]
+api_base = "https://ainexus.phison.com/api/external/v1"
+key_env = "AI_NEXUUS_PAT"
+
+[litellm]
+drop_params = true
+
+[jira]
+jira_base_url = "https://jira.phison.com:8443"
+jira_api_token_env = "JIRA_BENNY_BOT_PAT"
+
 [github_app]
 pr_commands = [
     "/describe --pr_description.publish_description_as_comment=true",
