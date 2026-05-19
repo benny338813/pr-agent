@@ -215,3 +215,47 @@ class TestGitLabProvider:
             private_token="config-token",
             ssl_verify=False,
         )
+
+    def test_configured_gitlab_token_can_reference_environment_variable(self, monkeypatch, mock_gitlab_client, mock_project):
+        monkeypatch.setenv("BOT_GITLAB_PAT", "resolved-config-token")
+        monkeypatch.setenv("GITLAB_TOKEN", "fallback-env-token")
+        with patch('pr_agent.git_providers.gitlab_provider.gitlab.Gitlab', return_value=mock_gitlab_client) as gitlab_ctor, \
+             patch('pr_agent.git_providers.gitlab_provider.get_settings') as mock_settings:
+
+            mock_settings.return_value.get.side_effect = lambda key, default=None: {
+                "GITLAB.URL": "https://config.gitlab.example.com",
+                "GITLAB.PERSONAL_ACCESS_TOKEN": "BOT_GITLAB_PAT",
+                "GITLAB.AUTH_TYPE": "private_token",
+            }.get(key, default)
+            mock_gitlab_client.projects.get.return_value = mock_project
+
+            GitLabProvider("https://config.gitlab.example.com/test/repo/-/merge_requests/1")
+
+        gitlab_ctor.assert_called_once_with(
+            url="https://config.gitlab.example.com",
+            private_token="resolved-config-token",
+            ssl_verify=True,
+        )
+
+    def test_missing_configured_gitlab_token_env_falls_back_to_environment(
+        self, monkeypatch, mock_gitlab_client, mock_project
+    ):
+        monkeypatch.delenv("MISSING_BOT_GITLAB_PAT", raising=False)
+        monkeypatch.setenv("GITLAB_TOKEN", "fallback-env-token")
+        with patch('pr_agent.git_providers.gitlab_provider.gitlab.Gitlab', return_value=mock_gitlab_client) as gitlab_ctor, \
+             patch('pr_agent.git_providers.gitlab_provider.get_settings') as mock_settings:
+
+            mock_settings.return_value.get.side_effect = lambda key, default=None: {
+                "GITLAB.URL": "https://config.gitlab.example.com",
+                "GITLAB.PERSONAL_ACCESS_TOKEN": "MISSING_BOT_GITLAB_PAT",
+                "GITLAB.AUTH_TYPE": "private_token",
+            }.get(key, default)
+            mock_gitlab_client.projects.get.return_value = mock_project
+
+            GitLabProvider("https://config.gitlab.example.com/test/repo/-/merge_requests/1")
+
+        gitlab_ctor.assert_called_once_with(
+            url="https://config.gitlab.example.com",
+            private_token="fallback-env-token",
+            ssl_verify=True,
+        )

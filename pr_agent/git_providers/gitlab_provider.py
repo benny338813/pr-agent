@@ -28,6 +28,28 @@ class DiffNotFoundError(Exception):
     """Raised when the diff for a merge request cannot be found."""
     pass
 
+def _as_config_scalar(value: Any) -> Any:
+    if isinstance(value, (list, tuple)):
+        return value[0] if value else None
+    return value
+
+
+def _looks_like_env_name(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value))
+
+
+def _resolve_config_secret(value: Any) -> Optional[str]:
+    value = _as_config_scalar(value)
+    if value is None or value == "":
+        return None
+    value = str(value).strip()
+    if value.startswith("@env "):
+        return os.getenv(value.split(None, 1)[1].strip())
+    if _looks_like_env_name(value):
+        return os.getenv(value)
+    return value
+
+
 class GitLabProvider(GitProvider):
 
     def __init__(self, merge_request_url: Optional[str] = None, incremental: Optional[bool] = False):
@@ -37,8 +59,10 @@ class GitLabProvider(GitProvider):
         self.gitlab_url = gitlab_url
         ssl_verify = get_settings().get("GITLAB.SSL_VERIFY", True)
         gitlab_access_token = (
-            get_settings().get("GITLAB.PERSONAL_ACCESS_TOKEN", None) or
-            get_settings().get("GITLAB.TOKEN", None) or
+            _resolve_config_secret(get_settings().get("GITLAB.PERSONAL_ACCESS_TOKEN_ENV", None)) or
+            _resolve_config_secret(get_settings().get("GITLAB.TOKEN_ENV", None)) or
+            _resolve_config_secret(get_settings().get("GITLAB.PERSONAL_ACCESS_TOKEN", None)) or
+            _resolve_config_secret(get_settings().get("GITLAB.TOKEN", None)) or
             os.getenv("GITLAB_PERSONAL_ACCESS_TOKEN") or
             os.getenv("GITLAB_TOKEN")
         )
