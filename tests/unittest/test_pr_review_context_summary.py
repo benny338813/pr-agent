@@ -1,3 +1,4 @@
+import tomllib
 from pathlib import Path
 from unittest import mock
 
@@ -42,6 +43,14 @@ def test_pr_review_prompt_requires_traditional_chinese_and_context_disclosure():
     assert "context_usage_summary: str = Field" not in prompt
     assert "GitNexus" in prompt
     assert "Jira" in prompt
+
+
+def test_repo_config_forces_traditional_chinese_responses():
+    repo_config = tomllib.loads(Path(".pr_agent.toml").read_text(encoding="utf-8"))
+    default_config = tomllib.loads(Path("pr_agent/settings/configuration.toml").read_text(encoding="utf-8"))
+
+    assert repo_config["config"]["response_language"] == "zh-TW"
+    assert default_config["config"]["response_language"] == "zh-TW"
 
 
 def test_prepare_pr_review_prefixes_context_summary(monkeypatch):

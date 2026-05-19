@@ -8,6 +8,7 @@ fallback_models = []
 custom_model_max_tokens = 32768
 max_model_tokens = 32768
 token_encoding = "cl100k_base"
+response_language = "zh-TW"
 
 [openai]
 api_base = "https://ainexus.phison.com/api/external/v1"
