@@ -1,6 +1,9 @@
 [pr_reviewer]
 enable_review_labels_effort = true
 enable_auto_approval = true
+extra_instructions="""\
+1. Respond in Traditional Chinese, except for the code sections.
+"""
 
 [config]
 model = "openai/qwen/qwen3.6-35b-a3b-fp8"

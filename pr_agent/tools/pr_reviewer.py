@@ -809,6 +809,7 @@ class PRReviewer(PRTool):
     def _get_review_context_summary_markdown(self) -> str:
         related_tickets = self.vars.get("related_tickets", []) if hasattr(self, "vars") else []
         ticket_count = len(related_tickets)
+        suggested_title_line = self._get_suggested_mr_title_line(related_tickets)
         if ticket_count:
             jira_line = f"Jira：已使用 {ticket_count} 筆 ticket"
         else:
@@ -822,9 +823,29 @@ class PRReviewer(PRTool):
 
         return (
             "### 本次 Review 使用的上下文\n\n"
+            f"{suggested_title_line}\n"
             f"- {jira_line}\n"
             f"- {gitnexus_line}\n\n"
         )
+
+    def _get_suggested_mr_title_line(self, related_tickets: List[Dict[str, Any]]) -> str:
+        ticket_ids = [
+            str(ticket.get("ticket_id")).strip()
+            for ticket in related_tickets
+            if isinstance(ticket, dict) and ticket.get("ticket_id")
+        ]
+        if not ticket_ids:
+            return "- 建議 MR Title：未產生（未找到 Jira ticket）"
+
+        title = str(self.vars.get("title", "") if hasattr(self, "vars") else "").strip()
+        if not title and hasattr(self, "git_provider"):
+            try:
+                title = str(self.git_provider.get_title()).strip()
+            except Exception:
+                title = ""
+        title = re.sub(r"^\[[A-Z][A-Z0-9]{1,9}-\d{1,7}\]\s*:?\s*", "", title)
+        title = title or "請補上 MR 摘要"
+        return f"- 建議 MR Title：`[{ticket_ids[0]}]: {title}`"
 
     def _get_user_answers(self) -> Tuple[str, str]:
         """

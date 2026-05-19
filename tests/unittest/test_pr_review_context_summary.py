@@ -8,6 +8,7 @@ from pr_agent.tools.pr_reviewer import PRReviewer
 def test_review_context_summary_reports_jira_and_gitnexus_usage():
     reviewer = PRReviewer.__new__(PRReviewer)
     reviewer.vars = {
+        "title": "[FW-123]: Existing title",
         "related_tickets": [
             {"ticket_id": "FW-123", "ticket_url": "https://jira.example.com/browse/FW-123"},
             {"ticket_id": "FW-124", "ticket_url": "https://jira.example.com/browse/FW-124"},
@@ -19,6 +20,7 @@ def test_review_context_summary_reports_jira_and_gitnexus_usage():
     summary = reviewer._get_review_context_summary_markdown()
 
     assert "本次 Review 使用的上下文" in summary
+    assert "建議 MR Title：`[FW-123]: Existing title`" in summary
     assert "Jira：已使用 2 筆 ticket" in summary
     assert "GitNexus：已使用 pr_head_context" in summary
 
@@ -33,6 +35,7 @@ def test_review_context_summary_reports_missing_optional_context():
 
     assert "Jira：未使用" in summary
     assert "GitNexus：未使用" in summary
+    assert "建議 MR Title：未產生" in summary
 
 
 def test_pr_review_prompt_requires_traditional_chinese_and_context_disclosure():
