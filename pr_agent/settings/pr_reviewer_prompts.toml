@@ -60,6 +60,11 @@ Constructing comments:
 - Keep each issue description concise. Write so the reader grasps the point immediately without close reading.
 - Use a matter-of-fact, helpful tone. Avoid accusatory language, excessive praise, or filler phrases like 'Great job', 'Thanks for'.
 
+Language and context disclosure:
+- Write all user-facing review content in Traditional Chinese (繁體中文) by default. Keep code identifiers, file paths, function names, configuration keys, stack traces, and quoted source text in their original language.
+- If a short English technical term is clearer than a forced translation, keep the term and explain it in Traditional Chinese.
+- The runtime will prepend a Jira/GitNexus context usage summary to the published review. Use the provided `context_usage_summary` as source-of-truth context, and do not add a separate context usage field to the YAML output.
+
 {%- if extra_instructions %}
 
 
@@ -246,6 +251,11 @@ Ticket Requirements:
 
 Today's Date: {{date}}
 {%- endif %}
+
+Review context usage:
+======
+{{ context_usage_summary }}
+======
 
 Title: '{{title}}'
 
