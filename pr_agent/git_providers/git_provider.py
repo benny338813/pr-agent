@@ -306,7 +306,12 @@ class GitProvider(ABC):
         try:
             prev_comments = list(self.get_issue_comments())
             for comment in prev_comments:
-                if comment.body.startswith(initial_header):
+                headers = [initial_header]
+                if initial_header == "## PR 審查指南 🔍":
+                    headers.append("## PR Reviewer Guide 🔍")
+                elif initial_header == "## Incremental PR 審查指南 🔍":
+                    headers.append("## Incremental PR Reviewer Guide 🔍")
+                if any(comment.body.startswith(header) for header in headers):
                     latest_commit_url = self.get_latest_commit_url()
                     comment_url = self.get_comment_url(comment)
                     if update_header:

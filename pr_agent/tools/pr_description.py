@@ -40,17 +40,26 @@ class PRDescription(PRTool):
         super().__init__(pr_url, ai_handler=ai_handler, args=args)
         self.git_provider = get_git_provider_with_context(pr_url)
         self.ai_handler = ai_handler()
+        self.main_pr_language = get_main_pr_language(
+            self.git_provider.get_languages(), self.git_provider.get_files()
+        )
+        self.COLLAPSIBLE_FILE_LIST_THRESHOLD = get_settings().pr_description.get("collapsible_file_list_threshold", 8)
+        enable_pr_diagram = get_settings().pr_description.get("enable_pr_diagram", False) and self.git_provider.is_supported("gfm_markdown")
         self.vars = {
             "title": self.git_provider.pr.title,
             "branch": self.git_provider.get_pr_branch(),
             "description": self.git_provider.get_pr_description(),
-            "language": get_main_pr_language(
-                self.git_provider.get_languages(), self.git_provider.get_files()
-            ),
+            "language": self.main_pr_language,
+            "diff": "",
             "commit_messages_str": self.git_provider.get_commit_messages(),
-            "extra_instructions": get_settings().pr_description_prompt.extra_instructions,
+            "extra_instructions": get_settings().get("pr_description_prompt.extra_instructions", ""),
             'duplicate_prompt_examples': get_settings().config.get('duplicate_prompt_examples', False),
             "enable_custom_labels": get_settings().config.enable_custom_labels,
+            "custom_labels_class": "",
+            "enable_semantic_files_types": get_settings().pr_description.enable_semantic_files_types,
+            "include_file_summary_changes": len(self.git_provider.get_diff_files()) <= self.COLLAPSIBLE_FILE_LIST_THRESHOLD,
+            "enable_pr_diagram": enable_pr_diagram,
+            "related_tickets": "",
         }
         self.token_handler = TokenHandler(
             self.git_provider.pr,
@@ -72,8 +81,6 @@ class PRDescription(PRTool):
         self.ai_handler.main_pr_language = self.main_pr_language
 
         # Initialize the variables dictionary
-        self.COLLAPSIBLE_FILE_LIST_THRESHOLD = get_settings().pr_description.get("collapsible_file_list_threshold", 8)
-        enable_pr_diagram = get_settings().pr_description.get("enable_pr_diagram", False) and self.git_provider.is_supported("gfm_markdown") # github and gitlab support gfm_markdown
         self.vars = {
             "title": self.git_provider.pr.title,
             "branch": self.git_provider.get_pr_branch(),
