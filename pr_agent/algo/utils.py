@@ -59,8 +59,8 @@ class TodoItem(TypedDict):
 
 
 class PRReviewHeader(str, Enum):
-    REGULAR = "## PR Reviewer Guide"
-    INCREMENTAL = "## Incremental PR Reviewer Guide"
+    REGULAR = "## PR 審查指南"
+    INCREMENTAL = "## Incremental PR 審查指南"
 
 
 class ReasoningEffort(str, Enum):

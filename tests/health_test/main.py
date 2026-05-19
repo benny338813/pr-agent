@@ -39,7 +39,7 @@ async def run_async():
         original_settings = copy.deepcopy(get_settings())
         await agent.handle_request(pr_url, ['review'])
         pr_review_body = dict(get_settings().data)['artifact']
-        assert pr_review_body.startswith('##') and 'PR Reviewer Guide' in pr_review_body
+        assert pr_review_body.startswith('##') and 'PR 審查指南' in pr_review_body
         context['settings'] = copy.deepcopy(original_settings)  # Restore settings state after each test to prevent test interference
         get_logger().info("PR review generated successfully\n")
 

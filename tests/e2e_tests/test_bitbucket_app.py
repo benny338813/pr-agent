@@ -73,7 +73,7 @@ def test_e2e_run_bitbucket_app():
             if len(comments) >= 5: # header, 3 suggestions, 1 review
                 valid_review = False
                 for comment_raw in comments_raw:
-                    if comment_raw.startswith('## PR Reviewer Guide 🔍'):
+                    if comment_raw.startswith('## PR 審查指南 🔍'):
                         valid_review = True
                         break
                 if valid_review:

@@ -1,4 +1,6 @@
 from pr_agent.tools.ticket_pr_compliance_check import (
+    _get_jira_config,
+    _extract_jira_ticket_keys,
     fetch_jira_tickets,
     find_jira_tickets,
 )
@@ -14,6 +16,9 @@ def _settings(values):
 
 
 class FakeProvider:
+    def get_title(self):
+        return ""
+
     def get_user_description(self):
         return "Implements PROJ-123 and https://jira.example.com/browse/OPS-9"
 
@@ -23,6 +28,23 @@ class FakeProvider:
 
 def test_find_jira_tickets_deduplicates_keys():
     assert find_jira_tickets("PROJ-123 https://jira.example.com/browse/PROJ-123 OPS-9") == ["PROJ-123", "OPS-9"]
+
+
+def test_extract_jira_ticket_keys_includes_mr_title():
+    class TitleOnlyProvider:
+        def get_title(self):
+            return "[X2QLC-12668]: Refine drive log"
+
+        def get_user_description(self):
+            return ""
+
+        def get_pr_description(self):
+            return ""
+
+        def get_pr_branch(self):
+            return "feature/no-ticket"
+
+    assert _extract_jira_ticket_keys(TitleOnlyProvider()) == ["X2QLC-12668"]
 
 
 def test_fetch_jira_tickets_uses_bearer_pat_from_env(monkeypatch):
@@ -70,6 +92,22 @@ def test_fetch_jira_tickets_uses_bearer_pat_from_env(monkeypatch):
     assert tickets[0]["title"] == "Local LLM integration"
     assert tickets[0]["labels"] == "ai, review"
     assert tickets[0]["sub_issues"][0]["ticket_url"] == "https://jira.example.com/browse/PROJ-124"
+
+
+def test_jira_config_accepts_token_env_as_list(monkeypatch):
+    import pr_agent.tools.ticket_pr_compliance_check as module
+
+    monkeypatch.setenv("JIRA_BENNY_BOT_PAT", "pat-from-env")
+    monkeypatch.setattr(module, "get_settings", lambda: _settings({
+        "jira.jira_base_url": "https://jira.example.com",
+        "jira.jira_api_token_env": ["JIRA_BENNY_BOT_PAT"],
+        "jira.jira_timeout": None,
+    }))
+
+    config = _get_jira_config()
+
+    assert config["token"] == "pat-from-env"
+    assert config["timeout"] == 30
 
 
 def test_fetch_jira_tickets_uses_basic_auth_when_email_is_configured(monkeypatch):

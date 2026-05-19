@@ -74,7 +74,7 @@ class TestConvertToMarkdown:
             'relevant_tests': 'No\n', 'possible_issues': 'No\n', 'security_concerns': 'No\n'}}
 
         expected_output = textwrap.dedent("""\
-            ## PR Reviewer Guide 🔍
+            ## PR 審查指南 🔍
 
             Here are some key observations to aid the review process:
 
@@ -107,7 +107,7 @@ class TestConvertToMarkdown:
         mock_git_provider.get_line_link.return_value = reference_link
 
         expected_output = textwrap.dedent(f"""\
-            ## PR Reviewer Guide 🔍
+            ## PR 審查指南 🔍
 
             Here are some key observations to aid the review process:
 
@@ -137,7 +137,7 @@ class TestConvertToMarkdown:
         }}
 
         expected_output = textwrap.dedent("""\
-            ## PR Reviewer Guide 🔍
+            ## PR 審查指南 🔍
 
             Here are some key observations to aid the review process:
 
@@ -184,7 +184,7 @@ class TestConvertToMarkdown:
         }
 
         expected_output = textwrap.dedent("""\
-            ## PR Reviewer Guide 🔍
+            ## PR 審查指南 🔍
 
             Here are some key observations to aid the review process:
 

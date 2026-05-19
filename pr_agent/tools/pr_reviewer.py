@@ -151,6 +151,18 @@ class PRReviewer(PRTool):
 
             # ticket extraction if exists
             await extract_and_cache_pr_tickets(self.git_provider, self.vars)
+            related_tickets = self.vars.get("related_tickets", [])
+            gitnexus_config = self._get_gitnexus_config() or {}
+            get_logger().info(
+                "PR review context status",
+                artifact={
+                    "pr_url": self.pr_url,
+                    "jira_ticket_count": len(related_tickets),
+                    "jira_ticket_ids": [ticket.get("ticket_id") for ticket in related_tickets if isinstance(ticket, dict)],
+                    "gitnexus_enabled": bool(gitnexus_config.get("enabled", False)),
+                    "gitnexus_mode": gitnexus_config.get("mode", ""),
+                },
+            )
 
             if self.incremental.is_incremental and hasattr(self.git_provider, "unreviewed_files_set") and not self.git_provider.unreviewed_files_set:
                 get_logger().info(f"Incremental review is enabled for {self.pr_url} but there are no new files")
@@ -178,7 +190,14 @@ class PRReviewer(PRTool):
                 reason = "Review output is not published"
                 if get_settings().config.publish_output:
                     reason += ": no major issues detected."
-                get_logger().info(reason)
+                get_logger().info(
+                    reason,
+                    artifact={
+                        "pr_url": self.pr_url,
+                        "publish_output": bool(get_settings().config.publish_output),
+                        "publish_output_no_suggestions": bool(get_settings().pr_reviewer.get('publish_output_no_suggestions', True)),
+                    },
+                )
                 get_settings().data = {"artifact": pr_review}
                 return
 
@@ -192,6 +211,17 @@ class PRReviewer(PRTool):
             else:
                 self.git_provider.publish_comment(pr_review)
 
+            get_logger().info(
+                "PR review published",
+                artifact={
+                    "pr_url": self.pr_url,
+                    "persistent_comment": bool(get_settings().pr_reviewer.persistent_comment),
+                    "incremental": bool(self.incremental.is_incremental),
+                    "jira_ticket_count": len(self.vars.get("related_tickets", [])),
+                    "gitnexus_status": self.gitnexus_context_status,
+                    "gitnexus_mode": self.gitnexus_context_mode,
+                },
+            )
             self.git_provider.remove_initial_comment()
         except Exception as e:
             get_logger().error(f"Failed to review PR: {e}")

@@ -35,16 +35,24 @@ def _get_jira_setting(name: str, default=""):
     )
 
 
+def _as_jira_scalar(value, default=""):
+    if value is None or value == "":
+        return default
+    if isinstance(value, (list, tuple)):
+        return value[0] if value else default
+    return value
+
+
 def _get_jira_config():
-    base_url = (_get_jira_setting("jira_base_url") or os.getenv("JIRA_BASE_URL", "")).rstrip("/")
-    token = _get_jira_setting("jira_api_token")
-    token_env = _get_jira_setting("jira_api_token_env")
+    base_url = str(_as_jira_scalar(_get_jira_setting("jira_base_url"), os.getenv("JIRA_BASE_URL", ""))).rstrip("/")
+    token = _as_jira_scalar(_get_jira_setting("jira_api_token"))
+    token_env = _as_jira_scalar(_get_jira_setting("jira_api_token_env"))
     if token_env:
-        token = os.getenv(token_env, token)
+        token = os.getenv(str(token_env), token)
     elif not token:
         token = os.getenv("JIRA_BENNY_BOT_PAT", token)
-    email = _get_jira_setting("jira_api_email")
-    timeout = int(_get_jira_setting("jira_timeout", 30))
+    email = _as_jira_scalar(_get_jira_setting("jira_api_email"))
+    timeout = int(_as_jira_scalar(_get_jira_setting("jira_timeout"), 30))
     return {
         "base_url": base_url,
         "token": token,
@@ -55,6 +63,14 @@ def _get_jira_config():
 
 def _get_jira_ticket_text(git_provider):
     parts = []
+    title_method = getattr(git_provider, "get_title", None)
+    if callable(title_method):
+        try:
+            title = title_method()
+            if title:
+                parts.append(str(title))
+        except Exception as e:
+            get_logger().debug(f"Failed to read PR title for Jira ticket extraction: {e}")
     for method_name in ("get_user_description", "get_pr_description"):
         method = getattr(git_provider, method_name, None)
         if not callable(method):
@@ -138,21 +154,44 @@ def _fetch_jira_ticket(ticket_key, config, max_characters):
 
 def fetch_jira_tickets(git_provider, max_characters):
     ticket_keys = _extract_jira_ticket_keys(git_provider)
+    config = _get_jira_config()
+    get_logger().info(
+        "Jira ticket extraction completed",
+        artifact={
+            "ticket_keys": ticket_keys,
+            "jira_base_url_configured": bool(config["base_url"]),
+            "jira_token_configured": bool(config["token"]),
+            "jira_auth_mode": "basic" if config["email"] else "pat",
+        },
+    )
     if not ticket_keys:
         return []
 
-    config = _get_jira_config()
     tickets_content = []
     for ticket_key in ticket_keys:
         try:
+            get_logger().info(f"Fetching Jira ticket {ticket_key}")
             ticket = _fetch_jira_ticket(ticket_key, config, max_characters)
             if ticket:
                 tickets_content.append(ticket)
+                get_logger().info(
+                    f"Fetched Jira ticket {ticket_key}",
+                    artifact={
+                        "ticket_id": ticket.get("ticket_id"),
+                        "title_present": bool(ticket.get("title")),
+                        "description_present": bool(ticket.get("body")),
+                        "sub_issues_count": len(ticket.get("sub_issues") or []),
+                    },
+                )
         except Exception as e:
             get_logger().warning(
                 f"Failed to fetch Jira ticket {ticket_key}: {e}",
                 artifact={"traceback": traceback.format_exc()},
             )
+    get_logger().info(
+        "Jira ticket fetch summary",
+        artifact={"requested_count": len(ticket_keys), "fetched_count": len(tickets_content)},
+    )
     return tickets_content
 
 
@@ -342,6 +381,7 @@ async def extract_tickets(git_provider):
 
 async def extract_and_cache_pr_tickets(git_provider, vars):
     if not get_settings().get('pr_reviewer.require_ticket_analysis_review', False):
+        get_logger().info("Ticket analysis review is disabled; skipping ticket extraction")
         return
 
     related_tickets = get_settings().get('related_tickets', [])
@@ -363,6 +403,8 @@ async def extract_and_cache_pr_tickets(git_provider, vars):
 
             vars['related_tickets'] = related_tickets
             get_settings().set('related_tickets', related_tickets)
+        else:
+            get_logger().info("No related tickets were extracted for this PR")
     else:
         get_logger().info("Using cached tickets", artifact={"tickets": related_tickets})
         vars['related_tickets'] = related_tickets
