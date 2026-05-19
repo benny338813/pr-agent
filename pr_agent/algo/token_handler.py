@@ -19,6 +19,13 @@ class ModelTypeValidator:
         return 'claude' in model_name
 
 
+class ApproximateTokenEncoder:
+    def encode(self, text, *args, **kwargs):
+        if not text:
+            return []
+        return list(range(ceil(len(str(text)) / 4)))
+
+
 class TokenEncoder:
     _encoder_instance = None
     _model = None
@@ -31,11 +38,23 @@ class TokenEncoder:
             with cls._lock:  # Lock acquisition to ensure thread safety
                 if cls._encoder_instance is None or model != cls._model:
                     cls._model = model
+                    encoding_name = get_settings().get("config.token_encoding", "")
                     try:
-                        cls._encoder_instance = encoding_for_model(cls._model) if "gpt" in cls._model else get_encoding(
-                            "o200k_base")
-                    except:
-                        cls._encoder_instance = get_encoding("o200k_base")
+                        if encoding_name:
+                            cls._encoder_instance = get_encoding(encoding_name)
+                        elif "gpt" in cls._model:
+                            cls._encoder_instance = encoding_for_model(cls._model)
+                        else:
+                            cls._encoder_instance = get_encoding("cl100k_base")
+                    except Exception as e:
+                        get_logger().warning(f"Failed to load token encoding for model {cls._model}: {e}")
+                        try:
+                            cls._encoder_instance = get_encoding("cl100k_base")
+                        except Exception as fallback_error:
+                            get_logger().warning(
+                                f"Falling back to approximate token counting: {fallback_error}"
+                            )
+                            cls._encoder_instance = ApproximateTokenEncoder()
         return cls._encoder_instance
 
 

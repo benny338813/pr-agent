@@ -1,241 +1,208 @@
+# PR-Agent 內部 GitLab 版快速啟動
 
+這個 fork 用來在公司內部 GitLab 上執行 PR-Agent review，預設整合：
 
-<br />
+- GitLab：`https://fw-git2.phison.com`
+- Ainexus OpenAI-compatible LLM：`Qwen/Qwen3.6-35B-A3B-FP8`
+- Jira：`https://jira.phison.com:8443`
 
-<div align="center">
+原始上游 README 已保留在 `README.old.md`。
 
+## 1. 準備 Python 環境
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://codium.ai/images/pr_agent/logo-dark.png" width="330">
-  <source media="(prefers-color-scheme: light)" srcset="https://codium.ai/images/pr_agent/logo-light.png" width="330">
-  <img src="https://codium.ai/images/pr_agent/logo-light.png" alt="logo" width="330">
+專案要求 Python 3.12。若已經有 `pyenv` 環境 `pr-agent-env`，直接使用即可。
 
-</picture>
-<br>
-The Original Open-Source PR Reviewer
-<br><br>
-<a href="https://github.com/Codium-ai/pr-agent/commits/main">
-<img alt="GitHub" src="https://img.shields.io/github/last-commit/Codium-ai/pr-agent/main?style=for-the-badge" height="20">
-</a>
-</div>
+安裝依賴：
 
----
-
- This repository contains the open-source PR Agent Project. 
- It is not the Qodo free tier.
- 
-Try the free version on our website.
-
-👉[Get Started Now](https://www.qodo.ai/get-started/)
-
-PR-Agent is an open-source, AI-powered code review agent and a community-maintained legacy project of Qodo. It is distinct from Qodo’s primary AI code review offering, which provides a feature-rich, context-aware experience. Qodo now offers a free tier that integrates seamlessly with GitHub, GitLab, Bitbucket, and Azure DevOps for high-quality automated reviews.
-
-
-## Big News for PR-Agent
-
-PR-Agent has a new home!
-
-After years of building this tool alongside the community, Qodo has donated PR-Agent to the open-source community - and we couldn't be more excited about what comes next.
-
-The project now lives in the PR-Agent org on GitHub, is fully community-owned, and is open for contributions and additional maintainers.
-
-What else changed: 
-- Docs moved to - www.pr-agent.ai
-- Qodo Merge (Qodo 1.0), the hosted URL, which was the enterprise version of PR-Agent, has been rebranded and evolved into Qodo (Qodo 2.0), a full AI code review platform.
-
-
-## Table of Contents
-
-- [Getting Started](#getting-started)
-- [Why Use PR-Agent?](#why-use-pr-agent)
-- [Features](#features)
-- [See It in Action](#see-it-in-action)
-- [How It Works](#how-it-works)
-- [Data Privacy](#data-privacy)
-- [Contributing](#contributing)
-
-## Getting Started
-
-### 🚀 Quick Start for PR-Agent
-
-#### 1. Try it Instantly (No Setup)
-Test PR-Agent on any public GitHub repository by commenting `@CodiumAI-Agent /improve`
-
-#### 2. GitHub Action (Recommended)
-Add automated PR reviews to your repository with a simple workflow file:
-```yaml
-# .github/workflows/pr-agent.yml
-name: PR Agent
-on:
-  pull_request:
-    types: [opened, synchronize]
-jobs:
-  pr_agent_job:
-    runs-on: ubuntu-latest
-    steps:
-    - name: PR Agent action step
-      uses: Codium-ai/pr-agent@main
-      env:
-        OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-```
-[Full GitHub Action setup guide](https://docs.pr-agent.ai/installation/github/#run-as-a-github-action)
-
-#### 3. CLI Usage (Local Development)
-Run PR-Agent locally on your repository:
 ```bash
-pip install pr-agent
-export OPENAI_KEY=your_key_here
-pr-agent --pr_url https://github.com/owner/repo/pull/123 review
+cd /home/sysd92/桌面/service/pr-agent
+PYENV_VERSION=pr-agent-env pyenv exec python -m pip install -r requirements.txt
+PYENV_VERSION=pr-agent-env pyenv exec python -m pip install -r requirements-dev.txt
 ```
-[Complete CLI setup guide](https://docs.pr-agent.ai/usage-guide/automations_and_usage/#local-repo-cli)
 
-#### 4. Other Platforms
-- [GitLab webhook setup](https://docs.pr-agent.ai/installation/gitlab/)
-- [BitBucket app installation](https://docs.pr-agent.ai/installation/bitbucket/)
-- [Azure DevOps setup](https://docs.pr-agent.ai/installation/azure/)
+如果公司憑證會造成 Python HTTPS 驗證問題，可額外安裝：
 
-[//]: # (## News and Updates)
+```bash
+PYENV_VERSION=pr-agent-env pyenv exec python -m pip install pip-system-certs
+```
 
-[//]: # ()
-[//]: # (## Aug 8, 2025)
+## 2. 設定 Secrets
 
-[//]: # ()
-[//]: # ()
-[//]: # ()
-[//]: # (## Jul 1, 2025)
+本機 secrets 放在：
 
-[//]: # (You can now receive automatic feedback from Qodo Merge in your local IDE after each commit. Read more about it [here]&#40;https://github.com/qodo-ai/agents/tree/main/agents/qodo-merge-post-commit&#41;.)
+```text
+pr_agent/settings/.secrets.toml
+```
 
-[//]: # ()
-[//]: # ()
-[//]: # (## Jun 21, 2025)
+必要內容範例：
 
-[//]: # ()
-[//]: # (v0.30 was [released]&#40;https://github.com/qodo-ai/pr-agent/releases&#41;)
+```toml
+[config]
+git_provider = "gitlab"
+model = "openai/Qwen/Qwen3.6-35B-A3B-FP8"
+fallback_models = []
+custom_model_max_tokens = 32768
+max_model_tokens = 32768
+token_encoding = "cl100k_base"
 
-[//]: # ()
-[//]: # ()
-[//]: # (## Apr 30, 2025)
+[gitlab]
+url = "https://fw-git2.phison.com"
+auth_type = "private_token"
+personal_access_token = "你的 GitLab PAT"
+shared_secret = "你的 GitLab webhook secret"
 
-[//]: # ()
-[//]: # (A new feature is now available in the `/improve` tool for Qodo Merge 💎 - Chat on code suggestions.)
+[openai]
+api_base = "https://ainexus.phison.com/api/external/v1"
+key_env = "AI_NEXUUS_PAT"
 
-[//]: # ()
-[//]: # (<img width="512" alt="image" src="https://codium.ai/images/pr_agent/improve_chat_on_code_suggestions_ask.png" />)
+[litellm]
+drop_params = true
 
-[//]: # ()
-[//]: # (Read more about it [here]&#40;https://docs.pr-agent.ai/tools/improve/#chat-on-code-suggestions&#41;.)
+[jira]
+jira_base_url = "https://jira.phison.com:8443"
+jira_api_token_env = "JIRA_BENNY_BOT_PAT"
+```
 
-[//]: # ()
-[//]: # ()
+LLM 和 Jira token 建議放環境變數，不要寫入 Git：
 
-## Why Use PR-Agent?
+```bash
+export AI_NEXUUS_PAT="你的 Ainexus PAT"
+export JIRA_BENNY_BOT_PAT="你的 Jira PAT"
+```
 
-### 🎯 Built for Real Development Teams
+`pr_agent/settings/.secrets.toml` 不應 commit。
 
-**Fast & Affordable**: Each tool (`/review`, `/improve`, `/ask`) uses a single LLM call (~30 seconds, low cost)
+## 3. 快速測試
 
-**Handles Any PR Size**: Our [PR Compression strategy](https://docs.pr-agent.ai/core-abilities/#pr-compression-strategy) effectively processes both small and large PRs
+先測 GitLab、Jira、Ainexus 是否都能連通：
 
-**Highly Customizable**: JSON-based prompting allows easy customization of review categories and behavior via [configuration files](pr_agent/settings/configuration.toml)
+```bash
+cd /home/sysd92/桌面/service/pr-agent
+PYENV_VERSION=pr-agent-env PYTHONPATH=. pyenv exec python scripts/smoke_gitlab_jira_ainexus.py
+```
 
-**Platform Agnostic**: 
-- **Git Providers**: GitHub, GitLab, BitBucket, Azure DevOps, Gitea
-- **Deployment**: CLI, GitHub Actions, Docker, self-hosted, webhooks
-- **AI Models**: OpenAI GPT, Claude, Deepseek, and more
+預期會看到：
 
-**Open Source Benefits**:
-- Full control over your data and infrastructure
-- Customize prompts and behavior for your team's needs
-- No vendor lock-in
-- Community-driven development
+```text
+GitLab MR:
+  status: ok
+Jira:
+  status: ok
+Ainexus:
+  status_code: 200
+```
 
-## Features
+測單一 MR 且不發 comment：
 
-<div style="text-align:left;">
+```bash
+PYENV_VERSION=pr-agent-env PYTHONPATH=. pyenv exec python -m pr_agent.cli \
+  --pr_url "https://fw-git2.phison.com/d9/ps5302-qlc/code/fw/x2_qlc_r5/-/merge_requests/3591" \
+  review \
+  --config.publish_output=false
+```
 
-PR-Agent offers comprehensive pull request functionalities integrated with various git providers:
+確認成功後，移除 `--config.publish_output=false` 才會真的回覆 MR。
 
-|                                                         |                                                                                        | GitHub | GitLab | Bitbucket | Azure DevOps | Gitea |
-|---------------------------------------------------------|----------------------------------------------------------------------------------------|:------:|:------:|:---------:|:------------:|:-----:|
-| [TOOLS](https://docs.pr-agent.ai/tools/)         | [Describe](https://docs.pr-agent.ai/tools/describe/)                            |   ✅   |   ✅   |    ✅     |      ✅      |  ✅   |
-|                                                         | [Review](https://docs.pr-agent.ai/tools/review/)                                |   ✅   |   ✅   |    ✅     |      ✅      |  ✅   |
-|                                                         | [Improve](https://docs.pr-agent.ai/tools/improve/)                              |   ✅   |   ✅   |    ✅     |      ✅      |  ✅   |
-|                                                         | [Ask](https://docs.pr-agent.ai/tools/ask/)                                      |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         | ⮑ [Ask on code lines](https://docs.pr-agent.ai/tools/ask/#ask-lines)            |   ✅   |   ✅   |           |              |       |
-|                                                         | [Help Docs](https://docs.pr-agent.ai/tools/help_docs/?h=auto#auto-approval)     |   ✅   |   ✅   |    ✅     |              |       |
-|                                                         | [Update CHANGELOG](https://docs.pr-agent.ai/tools/update_changelog/)            |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         |                                                                                                                     |        |        |           |              |       |
-| [USAGE](https://docs.pr-agent.ai/usage-guide/)   | [CLI](https://docs.pr-agent.ai/usage-guide/automations_and_usage/#local-repo-cli)                            |   ✅   |   ✅   |    ✅     |      ✅      |  ✅   |
-|                                                         | [App / webhook](https://docs.pr-agent.ai/usage-guide/automations_and_usage/#github-app)                      |   ✅   |   ✅   |    ✅     |      ✅      |  ✅   |
-|                                                         | [Tagging bot](https://github.com/Codium-ai/pr-agent#try-it-now)                                                     |   ✅   |        |           |              |       |
-|                                                         | [Actions](https://docs.pr-agent.ai/installation/github/#run-as-a-github-action)                              |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         |                                                                                                                     |        |        |           |              |       |
-| [CORE](https://docs.pr-agent.ai/core-abilities/) | [Adaptive and token-aware file patch fitting](https://docs.pr-agent.ai/core-abilities/compression_strategy/) |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         | [Dynamic context](https://docs.pr-agent.ai/core-abilities/dynamic_context/)                                  |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         | [Fetching ticket context](https://docs.pr-agent.ai/core-abilities/fetching_ticket_context/)                  |   ✅    |  ✅    |     ✅     |              |       |
-|                                                         | [Interactivity](https://docs.pr-agent.ai/core-abilities/interactivity/)                                      |   ✅   |  ✅   |           |              |       |
-|                                                         | [Local and global metadata](https://docs.pr-agent.ai/core-abilities/metadata/)                               |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         | [Multiple models support](https://docs.pr-agent.ai/usage-guide/changing_a_model/)                            |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         | [PR compression](https://docs.pr-agent.ai/core-abilities/compression_strategy/)                              |   ✅   |   ✅   |    ✅     |      ✅      |       |
-|                                                         | [Self reflection](https://docs.pr-agent.ai/core-abilities/self_reflection/)                                  |   ✅   |   ✅   |    ✅     |      ✅      |       |
+## 4. 一鍵啟動服務
 
-[//]: # (- Support for additional git providers is described in [here]&#40;./docs/Full_environments.md&#41;)
-___
+啟動 GitLab webhook 服務：
 
-## See It in Action
+```bash
+cd /home/sysd92/桌面/service/pr-agent
+./scripts/run_gitlab_webhook.sh
+```
 
-</div>
-<h4><a href="https://github.com/Codium-ai/pr-agent/pull/530">/describe</a></h4>
-<div align="center">
-<p float="center">
-<img src="https://www.codium.ai/images/pr_agent/describe_new_short_main.png" width="512">
-</p>
-</div>
-<hr>
+預設監聽 port `3000`。也可以指定 port：
 
-<h4><a href="https://github.com/Codium-ai/pr-agent/pull/732#issuecomment-1975099151">/review</a></h4>
-<div align="center">
-<p float="center">
-<kbd>
-<img src="https://www.codium.ai/images/pr_agent/review_new_short_main.png" width="512">
-</kbd>
-</p>
-</div>
-<hr>
+```bash
+PORT=8080 ./scripts/run_gitlab_webhook.sh
+```
 
-<h4><a href="https://github.com/Codium-ai/pr-agent/pull/732#issuecomment-1975099159">/improve</a></h4>
-<div align="center">
-<p float="center">
-<kbd>
-<img src="https://www.codium.ai/images/pr_agent/improve_new_short_main.png" width="512">
-</kbd>
-</p>
-</div>
+如果想啟動前先跑 smoke：
 
-<hr>
+```bash
+RUN_SMOKE=1 ./scripts/run_gitlab_webhook.sh
+```
 
-## How It Works
+GitLab webhook URL 設成：
 
-The following diagram illustrates PR-Agent tools and their flow:
+```text
+http://你的機器IP:3000/webhook
+```
 
-![PR-Agent Tools](https://www.qodo.ai/images/pr_agent/diagram-v0.9.png)
+若 GitLab 無法連到本機，請透過公司內部 reverse proxy、固定主機、或 ngrok 類工具轉發到此服務。
 
-## Data Privacy
+## 5. 開機自動啟動
 
-### Self-hosted PR-Agent
+建立 systemd service：
 
-- If you host PR-Agent with your OpenAI API key, it is between you and OpenAI. You can read their API data privacy policy here:
-https://openai.com/enterprise-privacy
+```bash
+sudo tee /etc/systemd/system/pr-agent-gitlab.service >/dev/null <<'EOF'
+[Unit]
+Description=PR-Agent GitLab Webhook
+After=network-online.target
+Wants=network-online.target
 
-## Contributing
+[Service]
+Type=simple
+User=sysd92
+WorkingDirectory=/home/sysd92/桌面/service/pr-agent
+Environment=PYENV_VERSION=pr-agent-env
+Environment=PYTHONPATH=.
+Environment=PORT=3000
+Environment=AI_NEXUUS_PAT=你的 Ainexus PAT
+Environment=JIRA_BENNY_BOT_PAT=你的 Jira PAT
+ExecStart=/home/sysd92/.pyenv/bin/pyenv exec python -m pr_agent.servers.gitlab_webhook
+Restart=always
+RestartSec=5
 
-To contribute to the project, get started by reading our [Contributing Guide](https://github.com/qodo-ai/pr-agent/blob/b09eec265ef7d36c232063f76553efb6b53979ff/CONTRIBUTING.md).
+[Install]
+WantedBy=multi-user.target
+EOF
+```
 
+啟用並啟動：
 
-## ❤️ Community
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable pr-agent-gitlab
+sudo systemctl start pr-agent-gitlab
+```
 
-This open-source release remains here as a community contribution from Qodo — the origin of modern AI-powered code collaboration. We’re proud to share it and inspire developers worldwide.
+查看狀態：
 
-The project now has its first external maintainer, Naor ([@naorpeled](https://github.com/naorpeled)), and is currently in the process of being donated to an open-source foundation.
+```bash
+systemctl status pr-agent-gitlab
+journalctl -u pr-agent-gitlab -f
+```
+
+如果不想把 token 寫進 service 檔，可改用 `EnvironmentFile` 指向只給本機讀取的檔案。
+
+## 6. 常用指令
+
+查看設定是否被讀到：
+
+```bash
+PYENV_VERSION=pr-agent-env PYTHONPATH=. pyenv exec python - <<'PY'
+from pr_agent.config_loader import get_settings
+for key in [
+    "config.git_provider",
+    "config.model",
+    "gitlab.url",
+    "gitlab.auth_type",
+    "openai.api_base",
+    "jira.jira_base_url",
+]:
+    print(key, "=", get_settings().get(key))
+PY
+```
+
+重新跑單元測試：
+
+```bash
+PYENV_VERSION=pr-agent-env PYTHONPATH=. pyenv exec python -m pytest \
+  tests/unittest/test_jira_ticket_context.py \
+  tests/unittest/test_litellm_api_key_guard.py \
+  tests/unittest/test_gitlab_provider.py \
+  -q
+```
