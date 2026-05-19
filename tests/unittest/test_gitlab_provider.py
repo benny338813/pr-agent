@@ -192,3 +192,26 @@ class TestGitLabProvider:
         assert first == second == [{"diff": "d"}]
         m_pbp.assert_called_once_with("grp/repo")
         proj.repository_compare.assert_called_once_with("old", "new")
+
+    def test_configured_gitlab_token_takes_precedence_over_environment(self, monkeypatch, mock_gitlab_client, mock_project):
+        monkeypatch.setenv("GITLAB_URL", "https://env.gitlab.example.com")
+        monkeypatch.setenv("GITLAB_TOKEN", "env-token")
+        monkeypatch.setenv("GITLAB_AUTH_TYPE", "oauth_token")
+        with patch('pr_agent.git_providers.gitlab_provider.gitlab.Gitlab', return_value=mock_gitlab_client) as gitlab_ctor, \
+             patch('pr_agent.git_providers.gitlab_provider.get_settings') as mock_settings:
+
+            mock_settings.return_value.get.side_effect = lambda key, default=None: {
+                "GITLAB.URL": "https://config.gitlab.example.com",
+                "GITLAB.PERSONAL_ACCESS_TOKEN": "config-token",
+                "GITLAB.AUTH_TYPE": "private_token",
+                "GITLAB.SSL_VERIFY": False,
+            }.get(key, default)
+            mock_gitlab_client.projects.get.return_value = mock_project
+
+            GitLabProvider("https://config.gitlab.example.com/test/repo/-/merge_requests/1")
+
+        gitlab_ctor.assert_called_once_with(
+            url="https://config.gitlab.example.com",
+            private_token="config-token",
+            ssl_verify=False,
+        )
